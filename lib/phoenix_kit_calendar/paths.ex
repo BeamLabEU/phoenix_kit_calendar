@@ -15,16 +15,13 @@ defmodule PhoenixKitCalendar.Paths do
   def index, do: Routes.path(@base)
 
   @doc """
-  The calendar page opened on another user's calendar. Only meaningful for
-  viewers holding `calendar.view_others`.
+  The calendar page with a layer selection. `people` is the compact URL
+  form built by the LiveView: `nil` (own calendar — no param), `"all"`
+  (every calendar), or a comma-joined uuid list. Only meaningful for
+  viewers holding `calendar.view_others` — the LiveView sanitizes the
+  param against permissions on every mount/patch.
   """
-  @spec for_user(String.t()) :: String.t()
-  def for_user(user_uuid), do: Routes.path("#{@base}?user=#{user_uuid}")
-
-  @doc """
-  The combined Everyone view — every user's events overlaid on one
-  calendar. Only meaningful for viewers holding `calendar.view_others`.
-  """
-  @spec everyone() :: String.t()
-  def everyone, do: Routes.path("#{@base}?user=all")
+  @spec people(String.t() | nil) :: String.t()
+  def people(nil), do: index()
+  def people(param), do: Routes.path("#{@base}?people=#{param}")
 end

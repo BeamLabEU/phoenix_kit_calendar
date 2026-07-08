@@ -171,19 +171,24 @@ defmodule PhoenixKitCalendar.Events do
   end
 
   @doc """
-  Map of `owner_uuid => event count` across all calendars. Powers the
-  person switcher's "has events" annotation, so it requires cross-calendar
-  read access (`calendar.view_others` / `calendar.edit_others`).
+  Map of `owner_uuid => event count` across all calendars. Requires
+  cross-calendar read access (`calendar.view_others` /
+  `calendar.edit_others`).
+
+  Pass a `from`/`until` date window to count only events overlapping it —
+  that powers the person panel's "empty (this view)" badge, which follows
+  the visible range rather than all time.
   """
-  @spec count_events_by_owner(Scope.t() | nil) ::
+  @spec count_events_by_owner(Scope.t() | nil, Date.t() | nil, Date.t() | nil) ::
           {:ok, %{String.t() => non_neg_integer()}} | {:error, :unauthorized}
-  def count_events_by_owner(scope) do
+  def count_events_by_owner(scope, from \\ nil, until \\ nil) do
     if Scope.can?(scope, @view_others) or Scope.can?(scope, @edit_others) do
       counts =
         from(e in Event,
           group_by: e.owner_uuid,
           select: {e.owner_uuid, count(e.uuid)}
         )
+        |> maybe_window(from, until)
         |> repo().all()
         |> Map.new()
 
@@ -192,6 +197,19 @@ defmodule PhoenixKitCalendar.Events do
       {:error, :unauthorized}
     end
   end
+
+  defp maybe_window(query, %Date{} = from, %Date{} = until) do
+    from_dt = DateTime.new!(from, ~T[00:00:00], "Etc/UTC")
+    until_dt = DateTime.new!(until, ~T[00:00:00], "Etc/UTC")
+
+    from(e in query,
+      where:
+        (not e.all_day and e.starts_at < ^until_dt and e.ends_at > ^from_dt) or
+          (e.all_day and e.starts_on < ^until and e.ends_on > ^from)
+    )
+  end
+
+  defp maybe_window(query, _from, _until), do: query
 
   # ===========================================================================
   # Mutations
