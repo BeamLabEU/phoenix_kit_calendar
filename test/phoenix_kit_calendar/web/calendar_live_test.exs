@@ -33,6 +33,10 @@ defmodule PhoenixKitCalendar.Web.CalendarLiveTest do
 
   defp scope_of(user, perms), do: fake_scope(user_uuid: user.uuid, permissions: perms)
 
+  defp build_conn_for do
+    Phoenix.ConnTest.build_conn() |> Plug.Test.init_test_session(%{})
+  end
+
   describe "own calendar" do
     test "renders with the base permission", %{conn: conn, me: me} do
       conn = login(conn, me, ["calendar"])
@@ -142,6 +146,101 @@ defmodule PhoenixKitCalendar.Web.CalendarLiveTest do
       {:ok, _view, html} = live(conn, "#{@path}?user=#{other.uuid}")
 
       assert html =~ "My calendar"
+    end
+
+    test "Everyone view overlays all calendars with owner-prefixed titles",
+         %{conn: conn, me: me, other: other} do
+      today = Date.utc_today()
+
+      {:ok, _} =
+        Events.create_event(scope_of(me, ["calendar"]), me.uuid, %{
+          "title" => "Mine alone",
+          "starts_at" => DateTime.new!(today, ~T[09:00:00], "Etc/UTC"),
+          "ends_at" => DateTime.new!(today, ~T[10:00:00], "Etc/UTC")
+        })
+
+      {:ok, _} =
+        Events.create_event(scope_of(other, ["calendar"]), other.uuid, %{
+          "title" => "Theirs alone",
+          "starts_at" => DateTime.new!(today, ~T[11:00:00], "Etc/UTC"),
+          "ends_at" => DateTime.new!(today, ~T[12:00:00], "Etc/UTC")
+        })
+
+      conn = login(conn, me, ["calendar", "calendar.view_others"])
+      {:ok, _view, _html} = live(conn, @path)
+
+      conn2 = login(build_conn_for(), me, ["calendar", "calendar.view_others"])
+      {:ok, _view, html} = live(conn2, "#{@path}?user=all")
+
+      # both calendars visible, each event carrying its owner's short label
+      assert html =~ "Mine alone"
+      assert html =~ "Theirs alone"
+      assert html =~ "·"
+      # no single target calendar to create onto
+      refute html =~ "New event"
+      # read-only badge for a viewer without edit_others
+      assert html =~ "Read only"
+    end
+
+    test "person toggles narrow the Everyone overlay", %{conn: conn, me: me, other: other} do
+      today = Date.utc_today()
+
+      {:ok, _} =
+        Events.create_event(scope_of(me, ["calendar"]), me.uuid, %{
+          "title" => "Mine alone",
+          "starts_at" => DateTime.new!(today, ~T[09:00:00], "Etc/UTC"),
+          "ends_at" => DateTime.new!(today, ~T[10:00:00], "Etc/UTC")
+        })
+
+      {:ok, _} =
+        Events.create_event(scope_of(other, ["calendar"]), other.uuid, %{
+          "title" => "Theirs alone",
+          "starts_at" => DateTime.new!(today, ~T[11:00:00], "Etc/UTC"),
+          "ends_at" => DateTime.new!(today, ~T[12:00:00], "Etc/UTC")
+        })
+
+      conn = login(conn, me, ["calendar", "calendar.view_others"])
+      {:ok, view, html} = live(conn, "#{@path}?user=all")
+
+      # both visible with all people selected
+      assert html =~ "Mine alone"
+      assert html =~ "Theirs alone"
+
+      # toggle the other person off — their event disappears
+      html =
+        view
+        |> element(~s(button[phx-click=toggle_person][phx-value-uuid="#{other.uuid}"]))
+        |> render_click()
+
+      assert html =~ "Mine alone"
+      refute html =~ "Theirs alone"
+
+      # None clears the overlay entirely
+      html = view |> element("button[phx-click=select_no_people]") |> render_click()
+      refute html =~ "Mine alone"
+      refute html =~ "Theirs alone"
+
+      # All restores it
+      html = view |> element("button[phx-click=select_all_people]") |> render_click()
+      assert html =~ "Mine alone"
+      assert html =~ "Theirs alone"
+    end
+
+    test "Everyone view without view_others falls back to own calendar",
+         %{conn: conn, me: me} do
+      conn = login(conn, me, ["calendar"])
+      {:ok, _view, html} = live(conn, "#{@path}?user=all")
+
+      assert html =~ "My calendar"
+    end
+
+    test "Everyone view shows no read-only badge for an edit_others holder",
+         %{conn: conn, me: me} do
+      conn = login(conn, me, ["calendar", "calendar.view_others", "calendar.edit_others"])
+      {:ok, _view, html} = live(conn, "#{@path}?user=all")
+
+      refute html =~ "Read only"
+      refute html =~ "New event"
     end
 
     test "switcher annotates users without calendar access", %{conn: conn, me: me} do

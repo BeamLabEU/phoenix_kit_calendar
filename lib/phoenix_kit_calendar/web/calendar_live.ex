@@ -58,6 +58,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
       |> assign(:show_event_modal, false)
       |> assign(:editing_event, nil)
       |> assign(:event_form, nil)
+      |> assign(:selected_people, :all)
 
     {:ok, socket}
   end
@@ -65,29 +66,45 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
   @impl true
   def handle_params(params, _url, socket) do
     scope = socket.assigns.scope
-    own_uuid = socket.assigns.own_uuid
-
-    viewing_uuid =
-      case params["user"] do
-        uuid when is_binary(uuid) and uuid != own_uuid ->
-          if Events.can_view?(scope, uuid) and known_user?(socket, uuid),
-            do: uuid,
-            else: own_uuid
-
-        _ ->
-          own_uuid
-      end
+    viewing_uuid = resolve_viewing_uuid(socket, params["user"])
 
     socket =
       socket
       |> assign(:viewing_uuid, viewing_uuid)
-      |> assign(:own_calendar?, viewing_uuid == own_uuid)
-      |> assign(:can_edit_viewed?, Events.can_edit?(scope, viewing_uuid))
+      |> assign(:own_calendar?, viewing_uuid == socket.assigns.own_uuid)
+      |> assign(:can_edit_viewed?, can_edit_viewed?(scope, viewing_uuid))
+      |> assign(:read_only_badge?, read_only_badge?(scope, viewing_uuid, socket.assigns.own_uuid))
       |> assign(:viewing_label, user_label(socket, viewing_uuid))
       |> reload_events()
 
     {:noreply, socket}
   end
+
+  defp resolve_viewing_uuid(socket, user_param) do
+    own_uuid = socket.assigns.own_uuid
+
+    case user_param do
+      # The combined "who is busy when" view — every calendar overlaid
+      "all" ->
+        if socket.assigns.can_view_others?, do: :all, else: own_uuid
+
+      uuid when is_binary(uuid) and uuid != own_uuid ->
+        if Events.can_view?(socket.assigns.scope, uuid) and known_user?(socket, uuid),
+          do: uuid,
+          else: own_uuid
+
+      _ ->
+        own_uuid
+    end
+  end
+
+  defp read_only_badge?(_scope, viewing_uuid, own_uuid) when viewing_uuid == own_uuid, do: false
+
+  # per-event editing exists in the Everyone view iff edit_others
+  defp read_only_badge?(scope, :all, _own_uuid),
+    do: not Scope.can?(scope, "calendar.edit_others")
+
+  defp read_only_badge?(scope, other_uuid, _own_uuid), do: not Events.can_edit?(scope, other_uuid)
 
   # ── Calendar component callbacks (arrive as messages) ─────────────────────
 
@@ -140,10 +157,10 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     own_uuid = socket.assigns.own_uuid
 
     to =
-      if uuid == own_uuid or uuid == "" do
-        PhoenixKitCalendar.Paths.index()
-      else
-        PhoenixKitCalendar.Paths.for_user(uuid)
+      cond do
+        uuid == own_uuid or uuid == "" -> PhoenixKitCalendar.Paths.index()
+        uuid == "all" -> PhoenixKitCalendar.Paths.everyone()
+        true -> PhoenixKitCalendar.Paths.for_user(uuid)
       end
 
     {:noreply, push_patch(socket, to: to)}
@@ -155,6 +172,32 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     end
 
     {:noreply, socket}
+  end
+
+  def handle_event("toggle_person", %{"uuid" => uuid}, socket) do
+    all_uuids = MapSet.new(socket.assigns.switcher_users, & &1.uuid)
+
+    selected =
+      case socket.assigns.selected_people do
+        :all ->
+          MapSet.delete(all_uuids, uuid)
+
+        %MapSet{} = set ->
+          if MapSet.member?(set, uuid), do: MapSet.delete(set, uuid), else: MapSet.put(set, uuid)
+      end
+
+    # collapse back to the :all sentinel when everyone is selected again
+    selected = if MapSet.equal?(selected, all_uuids), do: :all, else: selected
+
+    {:noreply, socket |> assign(:selected_people, selected) |> reload_events()}
+  end
+
+  def handle_event("select_all_people", _params, socket) do
+    {:noreply, socket |> assign(:selected_people, :all) |> reload_events()}
+  end
+
+  def handle_event("select_no_people", _params, socket) do
+    {:noreply, socket |> assign(:selected_people, MapSet.new()) |> reload_events()}
   end
 
   def handle_event("close_modal", _params, socket) do
@@ -175,9 +218,11 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     params = normalize_params(params)
 
     result =
-      case editing do
-        nil -> Events.create_event(scope, viewing_uuid, params)
-        %Event{} = event -> Events.update_event(scope, event, params)
+      case {editing, viewing_uuid} do
+        # no single target calendar in the Everyone view
+        {nil, :all} -> {:error, :unauthorized}
+        {nil, owner_uuid} -> Events.create_event(scope, owner_uuid, params)
+        {%Event{} = event, _} -> Events.update_event(scope, event, params)
       end
 
     case result do
@@ -233,18 +278,52 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     %{scope: scope, viewing_uuid: viewing_uuid, window: {from, until}} = socket.assigns
 
     events =
-      case Events.list_events(scope, viewing_uuid, from, until) do
-        {:ok, events} -> Enum.map(events, &to_lib_event/1)
-        {:error, :unauthorized} -> []
+      case viewing_uuid do
+        :all ->
+          # Everyone's calendars overlaid; each event carries its owner's
+          # name so a day cell reads as "who is booked". The person toggles
+          # narrow the overlay to the people being compared.
+          opts =
+            case socket.assigns.selected_people do
+              :all -> []
+              %MapSet{} = selected -> [owner_uuids: MapSet.to_list(selected)]
+            end
+
+          case Events.list_all_events(scope, from, until, opts) do
+            {:ok, events} ->
+              labels = owner_label_map(socket)
+              Enum.map(events, &to_lib_event(&1, Map.get(labels, &1.owner_uuid)))
+
+            {:error, :unauthorized} ->
+              []
+          end
+
+        owner_uuid ->
+          case Events.list_events(scope, owner_uuid, from, until) do
+            {:ok, events} -> Enum.map(events, &to_lib_event/1)
+            {:error, :unauthorized} -> []
+          end
       end
 
     assign(socket, :calendar_events, events)
   end
 
-  defp to_lib_event(%Event{all_day: true} = event) do
+  # In the Everyone view there is no single target calendar: nothing to
+  # create onto (the New event button hides), while per-EVENT editing is
+  # authorized at modal-open time against each event's own owner.
+  defp can_edit_viewed?(_scope, :all), do: false
+  defp can_edit_viewed?(scope, owner_uuid), do: Events.can_edit?(scope, owner_uuid)
+
+  defp owner_label_map(socket) do
+    Map.new(socket.assigns.switcher_users, &{&1.uuid, &1.label})
+  end
+
+  defp to_lib_event(event, owner_label \\ nil)
+
+  defp to_lib_event(%Event{all_day: true} = event, owner_label) do
     %PhoenixLiveCalendar.Event{
       id: event.uuid,
-      title: event.title,
+      title: prefixed_title(event.title, owner_label),
       start: event.starts_on,
       end: event.ends_on,
       all_day: true,
@@ -255,10 +334,10 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     }
   end
 
-  defp to_lib_event(%Event{} = event) do
+  defp to_lib_event(%Event{} = event, owner_label) do
     %PhoenixLiveCalendar.Event{
       id: event.uuid,
-      title: event.title,
+      title: prefixed_title(event.title, owner_label),
       start: event.starts_at,
       end: event.ends_at,
       color: event.color,
@@ -270,6 +349,18 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
 
   defp status_atom("cancelled"), do: :cancelled
   defp status_atom(_), do: :confirmed
+
+  defp person_selected?(:all, _uuid), do: true
+  defp person_selected?(%MapSet{} = set, uuid), do: MapSet.member?(set, uuid)
+
+  defp prefixed_title(title, nil), do: title
+  defp prefixed_title(title, owner_label), do: "#{short_label(owner_label)} · #{title}"
+
+  # first name or the email's local part — enough to identify a person in
+  # a cramped month cell
+  defp short_label(label) do
+    label |> String.split(["@", " "], parts: 2) |> hd()
+  end
 
   # All active users for the person switcher, annotated with whether they
   # currently hold calendar access (through any role) and how many events
@@ -326,6 +417,9 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     Enum.any?(socket.assigns.switcher_users, &(&1.uuid == uuid))
   end
 
+  defp user_label(_socket, :all),
+    do: Gettext.gettext(PhoenixKitWeb.Gettext, "Everyone")
+
   defp user_label(socket, uuid) do
     case Enum.find(socket.assigns.switcher_users, &(&1.uuid == uuid)) do
       nil -> nil
@@ -336,8 +430,18 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
   # ── Modal helpers ──────────────────────────────────────────────────────────
 
   defp open_modal(socket, event, changeset) do
+    # A NEW event targets the viewed calendar; an EXISTING event is
+    # authorized against its own persisted owner — in the Everyone view a
+    # Boss edits per event while a Junior Manager stays read-only.
+    can_edit_event? =
+      case event do
+        nil -> socket.assigns.can_edit_viewed?
+        %Event{} -> Events.can_edit?(socket.assigns.scope, event.owner_uuid)
+      end
+
     socket
     |> assign(:editing_event, event)
+    |> assign(:can_edit_event?, can_edit_event?)
     |> assign(:event_form, to_form(inclusive_end(changeset), as: "event"))
     |> assign(:show_event_modal, true)
   end
@@ -346,6 +450,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     socket
     |> assign(:show_event_modal, false)
     |> assign(:editing_event, nil)
+    |> assign(:can_edit_event?, false)
     |> assign(:event_form, nil)
   end
 
@@ -389,10 +494,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
               {@viewing_label || Gettext.gettext(PhoenixKitWeb.Gettext, "Calendar")}
             <% end %>
           </h1>
-          <span
-            :if={not @own_calendar? and not @can_edit_viewed?}
-            class="badge badge-warning gap-1"
-          >
+          <span :if={@read_only_badge?} class="badge badge-warning gap-1">
             <.icon name="hero-eye" class="w-3.5 h-3.5" />
             {Gettext.gettext(PhoenixKitWeb.Gettext, "Read only")}
           </span>
@@ -408,6 +510,9 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
               <select name="user">
                 <option value="" selected={@own_calendar?}>
                   {Gettext.gettext(PhoenixKitWeb.Gettext, "Me")}
+                </option>
+                <option value="all" selected={@viewing_uuid == :all}>
+                  {Gettext.gettext(PhoenixKitWeb.Gettext, "Everyone")}
                 </option>
                 <option
                   :for={user <- @switcher_users}
@@ -428,6 +533,39 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
           >
             <.icon name="hero-plus" class="w-4 h-4" />
             {Gettext.gettext(PhoenixKitWeb.Gettext, "New event")}
+          </button>
+        </div>
+      </div>
+
+      <%!-- Person toggles — Everyone view only: pick whose calendars overlay --%>
+      <div
+        :if={@viewing_uuid == :all}
+        class="flex flex-wrap items-center gap-1.5 p-3 rounded-lg bg-base-100 shadow-sm"
+      >
+        <span class="text-sm text-base-content/60 mr-1">
+          {Gettext.gettext(PhoenixKitWeb.Gettext, "Show:")}
+        </span>
+        <button
+          :for={user <- @switcher_users}
+          type="button"
+          phx-click="toggle_person"
+          phx-value-uuid={user.uuid}
+          class={[
+            "btn btn-xs",
+            (person_selected?(@selected_people, user.uuid) && "btn-primary") || "btn-outline btn-ghost text-base-content/50"
+          ]}
+        >
+          {user.label}
+          <span :if={not user.has_events?} class="opacity-60">
+            ({Gettext.gettext(PhoenixKitWeb.Gettext, "empty")})
+          </span>
+        </button>
+        <div class="ml-auto flex gap-1">
+          <button type="button" phx-click="select_all_people" class="btn btn-xs btn-ghost">
+            {Gettext.gettext(PhoenixKitWeb.Gettext, "All")}
+          </button>
+          <button type="button" phx-click="select_no_people" class="btn btn-xs btn-ghost">
+            {Gettext.gettext(PhoenixKitWeb.Gettext, "None")}
           </button>
         </div>
       </div>
@@ -455,14 +593,14 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
           <%= cond do %>
             <% is_nil(@editing_event) -> %>
               {Gettext.gettext(PhoenixKitWeb.Gettext, "New event")}
-            <% @can_edit_viewed? -> %>
+            <% @can_edit_event? -> %>
               {Gettext.gettext(PhoenixKitWeb.Gettext, "Edit event")}
             <% true -> %>
               {Gettext.gettext(PhoenixKitWeb.Gettext, "Event")}
           <% end %>
         </:title>
 
-        <%= if @can_edit_viewed? do %>
+        <%= if @can_edit_event? do %>
           <.form
             for={@event_form}
             id="calendar-event-form"
@@ -550,7 +688,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
 
         <:actions>
           <button
-            :if={@can_edit_viewed? and not is_nil(@editing_event)}
+            :if={@can_edit_event? and not is_nil(@editing_event)}
             type="button"
             phx-click="delete_event"
             data-confirm={Gettext.gettext(PhoenixKitWeb.Gettext, "Delete this event?")}
@@ -562,7 +700,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
             {Gettext.gettext(PhoenixKitWeb.Gettext, "Close")}
           </button>
           <button
-            :if={@can_edit_viewed?}
+            :if={@can_edit_event?}
             type="submit"
             form="calendar-event-form"
             class="btn btn-primary"

@@ -20,4 +20,11 @@ defmodule PhoenixKitCalendar.Paths do
   """
   @spec for_user(String.t()) :: String.t()
   def for_user(user_uuid), do: Routes.path("#{@base}?user=#{user_uuid}")
+
+  @doc """
+  The combined Everyone view — every user's events overlaid on one
+  calendar. Only meaningful for viewers holding `calendar.view_others`.
+  """
+  @spec everyone() :: String.t()
+  def everyone, do: Routes.path("#{@base}?user=all")
 end

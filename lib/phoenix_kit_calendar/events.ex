@@ -117,6 +117,46 @@ defmodule PhoenixKitCalendar.Events do
   end
 
   @doc """
+  Lists EVERYONE's events overlapping the window — the combined "who is
+  busy when" view. Requires cross-calendar read access
+  (`calendar.view_others` / `calendar.edit_others`); a caller with only
+  the base key gets `{:error, :unauthorized}`.
+
+  ## Options
+
+  - `:owner_uuids` — restrict to these calendars (the person-filter
+    toggles in the Everyone view). Omit or `nil` for all calendars.
+  """
+  @spec list_all_events(Scope.t() | nil, Date.t(), Date.t(), keyword()) ::
+          {:ok, [Event.t()]} | {:error, :unauthorized}
+  def list_all_events(scope, %Date{} = from, %Date{} = until, opts \\ []) do
+    if Scope.can?(scope, @view_others) or Scope.can?(scope, @edit_others) do
+      from_dt = DateTime.new!(from, ~T[00:00:00], "Etc/UTC")
+      until_dt = DateTime.new!(until, ~T[00:00:00], "Etc/UTC")
+
+      events =
+        from(e in Event,
+          where:
+            (not e.all_day and e.starts_at < ^until_dt and e.ends_at > ^from_dt) or
+              (e.all_day and e.starts_on < ^until and e.ends_on > ^from),
+          order_by: [asc: e.starts_at, asc: e.starts_on]
+        )
+        |> maybe_filter_owners(Keyword.get(opts, :owner_uuids))
+        |> repo().all()
+
+      {:ok, events}
+    else
+      {:error, :unauthorized}
+    end
+  end
+
+  defp maybe_filter_owners(query, nil), do: query
+
+  defp maybe_filter_owners(query, owner_uuids) when is_list(owner_uuids) do
+    from(e in query, where: e.owner_uuid in ^owner_uuids)
+  end
+
+  @doc """
   Fetches one event, authorizing READ access against its persisted owner.
   """
   @spec get_event(Scope.t() | nil, String.t()) ::

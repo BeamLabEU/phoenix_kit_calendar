@@ -219,6 +219,34 @@ defmodule PhoenixKitCalendar.EventsTest do
     end
   end
 
+  describe "list_all_events/3 (the Everyone view)" do
+    test "returns every calendar's events for cross-calendar readers",
+         %{alice: alice, bob: bob} do
+      {:ok, a} = Events.create_event(scope_for(alice, ["calendar"]), alice.uuid, timed_attrs())
+
+      {:ok, b} =
+        Events.create_event(
+          scope_for(bob, ["calendar"]),
+          bob.uuid,
+          timed_attrs(%{"title" => "Bob thing"})
+        )
+
+      viewer = scope_for(alice, ["calendar", "calendar.view_others"])
+
+      {:ok, events} = Events.list_all_events(viewer, ~D[2026-07-01], ~D[2026-08-01])
+      uuids = Enum.map(events, & &1.uuid)
+      assert a.uuid in uuids
+      assert b.uuid in uuids
+    end
+
+    test "unauthorized without a cross-calendar key", %{alice: alice} do
+      base_only = scope_for(alice, ["calendar"])
+
+      assert {:error, :unauthorized} =
+               Events.list_all_events(base_only, ~D[2026-07-01], ~D[2026-08-01])
+    end
+  end
+
   describe "count_events_by_owner/1" do
     test "gated on cross-calendar read access", %{alice: alice, bob: bob} do
       {:ok, _} = Events.create_event(scope_for(bob, ["calendar"]), bob.uuid, timed_attrs())
