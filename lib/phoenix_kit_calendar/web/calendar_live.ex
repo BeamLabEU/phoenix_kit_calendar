@@ -571,8 +571,8 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
   def render(assigns) do
     ~H"""
     <div class="flex flex-col mx-auto max-w-6xl px-4 py-6 gap-4">
-      <%!-- Toolbar: what you're viewing + actions --%>
-      <div class="flex flex-wrap items-center justify-between gap-3">
+      <%!-- Toolbar: what you're viewing + actions (core admin_page_header) --%>
+      <.admin_page_header>
         <div class="flex items-center gap-3 min-w-0">
           <h1 class="text-2xl font-bold truncate">
             <.icon name="hero-calendar-days" class="w-7 h-7 inline-block mr-1" />
@@ -583,8 +583,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
             {Gettext.gettext(PhoenixKitWeb.Gettext, "Read only")}
           </span>
         </div>
-
-        <div class="flex items-center gap-2">
+        <:actions>
           <%!-- Calendars panel toggle — view_others holders only --%>
           <div :if={@can_view_others?} class="relative">
             <button type="button" phx-click="toggle_panel" class="btn btn-sm gap-2">
@@ -611,8 +610,8 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
             <.icon name="hero-plus" class="w-4 h-4" />
             {Gettext.gettext(PhoenixKitWeb.Gettext, "New event")}
           </button>
-        </div>
-      </div>
+        </:actions>
+      </.admin_page_header>
 
       <%!-- The month calendar (server-rendered) --%>
       <div class="card bg-base-100 shadow">
@@ -785,17 +784,8 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
       |> assign(:overflow, max(length(assigns.people) - @panel_row_cap, 0))
 
     ~H"""
-    <div class="fixed inset-0 z-40 sm:absolute sm:inset-auto sm:right-0 sm:top-full sm:mt-2">
-      <%!-- click-away backdrop (transparent on desktop; dims on mobile) --%>
-      <div
-        class="fixed inset-0 bg-base-content/30 sm:bg-transparent"
-        phx-click="close_panel"
-        aria-hidden="true"
-      >
-      </div>
-
-      <div class="absolute inset-x-2 top-12 sm:static sm:w-96 card bg-base-100 shadow-xl border border-base-content/10">
-        <div class="card-body p-3 gap-2">
+    <.popover_panel id="calendar-people-panel" on_close="close_panel">
+      <div class="card-body p-3 gap-2">
           <div class="flex items-center gap-2">
             <form id="calendar-people-search" phx-change="search_people" class="grow" onsubmit="return false;">
               <label class="input input-sm w-full">
@@ -859,9 +849,8 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
               {Gettext.gettext(PhoenixKitWeb.Gettext, "No people match")}
             </li>
           </ul>
-        </div>
       </div>
-    </div>
+    </.popover_panel>
     """
   end
 

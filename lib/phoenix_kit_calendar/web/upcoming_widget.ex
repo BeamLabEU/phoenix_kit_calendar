@@ -17,6 +17,7 @@ defmodule PhoenixKitCalendar.Web.UpcomingWidget do
   alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKitCalendar.Events
   alias PhoenixKitCalendar.Schemas.Event
+  alias PhoenixKitWeb.Components.Core.EmptyState
 
   @impl true
   def update(assigns, socket) do
@@ -78,9 +79,12 @@ defmodule PhoenixKitCalendar.Web.UpcomingWidget do
     <div class="card h-full overflow-hidden bg-base-100 flex flex-col">
       <div class={["card-body", (@compact && "p-2 gap-1") || "p-4 gap-2"]}>
         <%= if @events == [] do %>
-          <div class="flex flex-col items-center justify-center h-full text-base-content/50 gap-1">
-            <span class="hero-calendar-days w-6 h-6" />
-            <span class="text-sm">No upcoming events</span>
+          <div class="flex items-center justify-center h-full">
+            <EmptyState.empty_state
+              title="No upcoming events"
+              icon="hero-calendar-days"
+              variant="compact"
+            />
           </div>
         <% else %>
           <ul class={["overflow-y-auto", (@compact && "space-y-0.5") || "space-y-1.5"]}>
