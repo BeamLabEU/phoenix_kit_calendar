@@ -164,7 +164,8 @@ defmodule PhoenixKitCalendar.Web.CalendarLiveTest do
 
       assert html =~ "Their meeting"
       assert html =~ "Read only"
-      refute html =~ "New event"
+      # creation stays available — it targets the viewer's OWN calendar here
+      assert html =~ "New event"
     end
 
     test "soloing with edit_others allows editing and creating",
@@ -183,7 +184,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLiveTest do
   end
 
   describe "multi-calendar selection" do
-    test "?people=all overlays every calendar, no creation",
+    test "?people=all overlays every calendar",
          %{conn: conn, me: me, other: other} do
       create_timed(me, "Mine alone", ~T[09:00:00], ~T[10:00:00])
       create_timed(other, "Theirs alone", ~T[11:00:00], ~T[12:00:00])
@@ -194,8 +195,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLiveTest do
       assert html =~ "Mine alone"
       assert html =~ "Theirs alone"
       assert html =~ "Viewing"
-      # no single target calendar → no creation
-      refute html =~ "New event"
+      assert html =~ "New event"
       assert html =~ "Read only"
     end
 
@@ -236,6 +236,118 @@ defmodule PhoenixKitCalendar.Web.CalendarLiveTest do
       {:ok, _view, html} = live(conn, "#{@path}?people=#{Ecto.UUID.generate()}")
 
       assert html =~ "My calendar"
+    end
+
+    test "edit_others creates events for another person via the owner picker",
+         %{conn: conn, me: me, other: other} do
+      conn = login(conn, me, ["calendar", "calendar.view_others", "calendar.edit_others"])
+      {:ok, view, _html} = live(conn, @path)
+
+      view |> element("button", "New event") |> render_click()
+      html = render(view)
+      # the picker is present with Me preselected-by-default target
+      assert html =~ ~s(name="owner")
+
+      today = Date.utc_today()
+
+      view
+      |> form("#calendar-event-form", %{
+        "owner" => other.uuid,
+        "event" => %{
+          "title" => "Delegated briefing",
+          "all_day" => "false",
+          "starts_at" => "#{Date.to_iso8601(today)}T15:00:00",
+          "ends_at" => "#{Date.to_iso8601(today)}T16:00:00"
+        }
+      })
+      |> render_submit()
+
+      {:ok, [event]} =
+        Events.list_events(
+          scope_of(other, ["calendar"]),
+          other.uuid,
+          Date.add(today, -35),
+          Date.add(today, 35)
+        )
+
+      assert event.title == "Delegated briefing"
+      assert event.owner_uuid == other.uuid
+    end
+
+    test "picking a target outside the current view shows the warning",
+         %{conn: conn, me: me, other: other} do
+      conn = login(conn, me, ["calendar", "calendar.view_others", "calendar.edit_others"])
+      {:ok, view, _html} = live(conn, @path)
+
+      view |> element("button", "New event") |> render_click()
+
+      # default target (Me) IS the current view — no warning
+      refute render(view) =~ "won&#39;t appear here"
+
+      # switch the target to someone not in view
+      html =
+        view
+        |> form("#calendar-event-form", %{"owner" => other.uuid, "event" => %{"title" => "x"}})
+        |> render_change()
+
+      assert html =~ "won&#39;t appear here"
+    end
+
+    test "without edit_others a crafted owner param is sanitized to self",
+         %{conn: conn, me: me, other: other} do
+      conn = login(conn, me, ["calendar", "calendar.view_others"])
+      {:ok, view, _html} = live(conn, @path)
+
+      view |> element("button", "New event") |> render_click()
+      # no picker without edit_others
+      refute render(view) =~ ~s(name="owner")
+
+      today = Date.utc_today()
+
+      render_submit(view, "save_event", %{
+        "owner" => other.uuid,
+        "event" => %{
+          "title" => "Smuggled",
+          "all_day" => "false",
+          "starts_at" => "#{Date.to_iso8601(today)}T15:00:00",
+          "ends_at" => "#{Date.to_iso8601(today)}T16:00:00"
+        }
+      })
+
+      # landed on the CALLER's calendar, not the crafted target
+      {:ok, other_events} =
+        Events.list_events(
+          scope_of(other, ["calendar"]),
+          other.uuid,
+          Date.add(today, -35),
+          Date.add(today, 35)
+        )
+
+      assert other_events == []
+
+      {:ok, [event]} =
+        Events.list_events(
+          scope_of(me, ["calendar"]),
+          me.uuid,
+          Date.add(today, -35),
+          Date.add(today, 35)
+        )
+
+      assert event.title == "Smuggled"
+      assert event.owner_uuid == me.uuid
+    end
+
+    test "creating while viewing someone else read-only targets self with a warning",
+         %{conn: conn, me: me, other: other} do
+      conn = login(conn, me, ["calendar", "calendar.view_others"])
+      {:ok, view, _html} = live(conn, "#{@path}?people=#{other.uuid}")
+
+      view |> element("button", "New event") |> render_click()
+      html = render(view)
+
+      assert html =~ "On your calendar"
+      # own calendar is not part of the current view → warned
+      assert html =~ "won&#39;t appear here"
     end
 
     test "no view_others → forced to own calendar even via crafted multi URL",

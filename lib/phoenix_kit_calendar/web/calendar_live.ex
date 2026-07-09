@@ -85,6 +85,8 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     can_view_others? =
       Scope.can?(scope, "calendar.view_others") or Scope.can?(scope, "calendar.edit_others")
 
+    can_edit_others? = Scope.can?(scope, "calendar.edit_others")
+
     socket =
       socket
       |> assign(:page_title, Gettext.gettext(PhoenixKitWeb.Gettext, "Calendar"))
@@ -93,12 +95,14 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
       |> assign(:today, today)
       |> assign(:window, {from, until})
       |> assign(:can_view_others?, can_view_others?)
+      |> assign(:can_edit_others?, can_edit_others?)
       |> assign(:people, if(can_view_others?, do: load_people(), else: []))
       |> assign(:window_counts, %{})
       |> assign(:people_query, "")
       |> assign(:show_event_modal, false)
       |> assign(:editing_event, nil)
       |> assign(:can_edit_event?, false)
+      |> assign(:new_event_owner, nil)
       |> assign(:event_form, nil)
 
     {:ok, socket}
@@ -182,18 +186,14 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
   end
 
   def handle_info({:calendar_date_click, %Date{} = date}, socket) do
-    if socket.assigns.can_edit_single? do
-      changeset =
-        Event.changeset(%Event{}, %{
-          "all_day" => "false",
-          "starts_at" => DateTime.new!(date, ~T[09:00:00], "Etc/UTC"),
-          "ends_at" => DateTime.new!(date, ~T[10:00:00], "Etc/UTC")
-        })
+    changeset =
+      Event.changeset(%Event{}, %{
+        "all_day" => "false",
+        "starts_at" => DateTime.new!(date, ~T[09:00:00], "Etc/UTC"),
+        "ends_at" => DateTime.new!(date, ~T[10:00:00], "Etc/UTC")
+      })
 
-      {:noreply, open_modal(socket, nil, changeset)}
-    else
-      {:noreply, socket}
-    end
+    {:noreply, open_modal(socket, nil, changeset)}
   end
 
   def handle_info({:calendar_event_click, event_id}, socket) do
@@ -246,10 +246,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
   # ── Event modal events ──────────────────────────────────────────────────────
 
   def handle_event("new_event", _params, socket) do
-    if socket.assigns.can_edit_single? do
-      send(self(), {:calendar_date_click, socket.assigns.today})
-    end
-
+    send(self(), {:calendar_date_click, socket.assigns.today})
     {:noreply, socket}
   end
 
@@ -257,24 +254,36 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     {:noreply, close_modal(socket)}
   end
 
-  def handle_event("validate_event", %{"event" => params}, socket) do
+  def handle_event("validate_event", %{"event" => event_params} = params, socket) do
     changeset =
       (socket.assigns.editing_event || %Event{})
-      |> Event.changeset(normalize_params(params))
+      |> Event.changeset(normalize_params(event_params))
       |> Map.put(:action, :validate)
 
-    {:noreply, assign(socket, :event_form, to_form(changeset, as: "event"))}
+    {:noreply,
+     socket
+     |> assign(:new_event_owner, sanitize_owner(socket, params["owner"]))
+     |> assign(:event_form, to_form(changeset, as: "event"))}
   end
 
-  def handle_event("save_event", %{"event" => params}, socket) do
-    %{scope: scope, single_owner: single_owner, editing_event: editing} = socket.assigns
-    params = normalize_params(params)
+  def handle_event("save_event", %{"event" => event_params} = params, socket) do
+    %{scope: scope, editing_event: editing} = socket.assigns
+    event_params = normalize_params(event_params)
 
     result =
-      case {editing, single_owner} do
-        {%Event{} = event, _} -> Events.update_event(scope, event, params)
-        {nil, nil} -> {:error, :unauthorized}
-        {nil, owner_uuid} -> Events.create_event(scope, owner_uuid, params)
+      case editing do
+        %Event{} = event ->
+          Events.update_event(scope, event, event_params)
+
+        nil ->
+          # target = picker value (edit_others holders) or the modal default;
+          # sanitized to known people, authorized by the context either way
+          owner_uuid =
+            sanitize_owner(socket, params["owner"]) ||
+              socket.assigns.new_event_owner ||
+              socket.assigns.own_uuid
+
+          Events.create_event(scope, owner_uuid, event_params)
       end
 
     case result do
@@ -485,19 +494,43 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
   # ── Modal helpers ───────────────────────────────────────────────────────────
 
   defp open_modal(socket, event, changeset) do
-    # A NEW event targets the single selected calendar; an EXISTING event
-    # is authorized against its own persisted owner.
+    # A NEW event is always creatable (at minimum on your own calendar);
+    # an EXISTING event is authorized against its persisted owner.
     can_edit_event? =
       case event do
-        nil -> socket.assigns.can_edit_single?
+        nil -> true
         %Event{} -> Events.can_edit?(socket.assigns.scope, event.owner_uuid)
       end
 
     socket
     |> assign(:editing_event, event)
     |> assign(:can_edit_event?, can_edit_event?)
+    |> assign(:new_event_owner, if(is_nil(event), do: default_new_owner(socket)))
     |> assign(:event_form, to_form(inclusive_end(changeset), as: "event"))
     |> assign(:show_event_modal, true)
+  end
+
+  # Creating defaults to the single viewed calendar when the viewer may
+  # edit it, otherwise to their own calendar.
+  defp default_new_owner(socket) do
+    if socket.assigns.can_edit_single?,
+      do: socket.assigns.single_owner,
+      else: socket.assigns.own_uuid
+  end
+
+  # Only known people are acceptable targets, and only edit_others holders
+  # may target anyone but themselves. The context re-authorizes on create —
+  # this just keeps UI state (and the FK) clean.
+  defp sanitize_owner(_socket, nil), do: nil
+
+  defp sanitize_owner(socket, uuid) when is_binary(uuid) do
+    %{own_uuid: own_uuid, can_edit_others?: can_edit_others?, people: people} = socket.assigns
+
+    cond do
+      uuid == own_uuid -> own_uuid
+      can_edit_others? and Enum.any?(people, &(&1.uuid == uuid)) -> uuid
+      true -> own_uuid
+    end
   end
 
   defp close_modal(socket) do
@@ -505,6 +538,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     |> assign(:show_event_modal, false)
     |> assign(:editing_event, nil)
     |> assign(:can_edit_event?, false)
+    |> assign(:new_event_owner, nil)
     |> assign(:event_form, nil)
   end
 
@@ -549,6 +583,12 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
           count: MapSet.size(selected)
         )
     end
+  end
+
+  defp owner_options(people, own_uuid) do
+    me = {Gettext.gettext(PhoenixKitWeb.Gettext, "Me"), own_uuid}
+    others = people |> Enum.reject(&(&1.uuid == own_uuid)) |> Enum.map(&{&1.label, &1.uuid})
+    [me | others]
   end
 
   defp owner_label(people, own_uuid, uuid) do
@@ -600,11 +640,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
             />
           </div>
 
-          <button
-            :if={@can_edit_single?}
-            phx-click="new_event"
-            class="btn btn-primary btn-sm"
-          >
+          <button phx-click="new_event" class="btn btn-primary btn-sm">
             <.icon name="hero-plus" class="w-4 h-4" />
             {Gettext.gettext(PhoenixKitWeb.Gettext, "New event")}
           </button>
@@ -641,7 +677,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
           <% end %>
         </:title>
 
-        <%!-- Whose calendar this event belongs to (color dot matches the grid) --%>
+        <%!-- Whose calendar an EXISTING event belongs to (immutable) --%>
         <div
           :if={@editing_event}
           class="flex items-center gap-2 mb-3 text-sm text-base-content/70"
@@ -661,6 +697,37 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
             phx-submit="save_event"
             class="space-y-3"
           >
+            <%!-- Whose calendar the NEW event goes on. Not a changeset field
+                 by design (owner is never cast); the context authorizes the
+                 explicit argument on create. --%>
+            <div :if={is_nil(@editing_event)} class="space-y-2">
+              <%= if @can_edit_others? do %>
+                <.select
+                  name="owner"
+                  value={@new_event_owner}
+                  label={Gettext.gettext(PhoenixKitWeb.Gettext, "Calendar")}
+                  options={owner_options(@people, @own_uuid)}
+                />
+              <% else %>
+                <p class="text-sm text-base-content/70">
+                  <span class={["w-2.5 h-2.5 rounded-full inline-block mr-1", elem(owner_color(@own_uuid), 0)]} />
+                  {Gettext.gettext(PhoenixKitWeb.Gettext, "On your calendar")}
+                </p>
+              <% end %>
+
+              <div
+                :if={@new_event_owner && not MapSet.member?(@selected, @new_event_owner)}
+                class="alert alert-warning py-2 text-sm"
+              >
+                <.icon name="hero-exclamation-triangle" class="w-4 h-4" />
+                {Gettext.gettext(
+                  PhoenixKitWeb.Gettext,
+                  "%{name} isn't shown in your current view — the event will be created but won't appear here.",
+                  name: owner_label(@people, @own_uuid, @new_event_owner)
+                )}
+              </div>
+            </div>
+
             <.input
               field={@event_form[:title]}
               label={Gettext.gettext(PhoenixKitWeb.Gettext, "Title")}
