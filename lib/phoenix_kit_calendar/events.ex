@@ -117,6 +117,7 @@ defmodule PhoenixKitCalendar.Events do
           order_by: [asc: e.starts_at, asc: e.starts_on]
         )
         |> repo().all()
+        |> resolve_live_locations()
 
       {:ok, events}
     end
@@ -149,6 +150,7 @@ defmodule PhoenixKitCalendar.Events do
         )
         |> maybe_filter_owners(Keyword.get(opts, :owner_uuids))
         |> repo().all()
+        |> resolve_live_locations()
 
       {:ok, events}
     else
@@ -179,14 +181,14 @@ defmodule PhoenixKitCalendar.Events do
       %Event{} = event ->
         cond do
           authorize(scope, event.owner_uuid, :view) == :ok ->
-            {:ok, event}
+            {:ok, resolve_live_locations(event)}
 
           # being a participant grants visibility of THIS event only —
           # never of the rest of the owner's calendar — and, like every
           # other path, only while the calendar module is enabled
           # (boss's call 2026-07-09: module off disables everything)
           calendar_enabled?() and participant?(scope, event) ->
-            {:ok, event}
+            {:ok, resolve_live_locations(event)}
 
           true ->
             {:error, :unauthorized}
@@ -364,9 +366,50 @@ defmodule PhoenixKitCalendar.Events do
     )
   end
 
+  # Rewrites each loaded event's display `location` to the LINKED
+  # location's CURRENT name (schemaless batch lookup — the table exists in
+  # every install). The stored string is only the save-time snapshot and
+  # serves as the fallback when the location row is gone or trashed — so
+  # renaming a location propagates to every event linked by uuid.
+  defp resolve_live_locations(events) when is_list(events) do
+    uuids =
+      events
+      |> Enum.map(& &1.location_uuid)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    if uuids == [] do
+      events
+    else
+      names =
+        from(l in "phoenix_kit_locations",
+          where: l.uuid in type(^uuids, {:array, UUIDv7}) and l.status != "trashed",
+          select: {type(l.uuid, UUIDv7), l.name}
+        )
+        |> repo().all()
+        |> Map.new()
+
+      Enum.map(events, fn event ->
+        case event.location_uuid && Map.get(names, event.location_uuid) do
+          name when is_binary(name) and name != "" -> %{event | location: name}
+          _ -> event
+        end
+      end)
+    end
+  rescue
+    # a failed lookup must never break listing — the snapshots suffice
+    _ -> events
+  end
+
+  defp resolve_live_locations(%Event{} = event) do
+    [event] |> resolve_live_locations() |> hd()
+  end
+
   # Snapshot the picked location's name into the free-text column so
-  # rendering never needs the locations module. A cleared/absent pick keeps
-  # whatever the user typed.
+  # rendering never needs the locations module — but it is only the
+  # FALLBACK: display resolves the current name live via
+  # resolve_live_locations/1. A cleared/absent pick keeps whatever the
+  # user typed.
   defp snapshot_location(%Ecto.Changeset{} = changeset) do
     case Ecto.Changeset.get_change(changeset, :location_uuid) do
       nil ->

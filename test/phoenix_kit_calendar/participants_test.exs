@@ -448,5 +448,64 @@ defmodule PhoenixKitCalendar.ParticipantsTest do
       assert event.location == "Cafe corner"
       assert event.location_uuid == nil
     end
+
+    test "renaming a linked location propagates to loaded events (uuid link is live)",
+         %{alice: alice} do
+      location_uuid = seed("phoenix_kit_locations", %{name: "Old HQ"})
+      scope = scope_for(alice, ["calendar"])
+
+      {:ok, event} =
+        Events.create_event(scope, alice.uuid, %{
+          "title" => "Board meeting",
+          "location_uuid" => location_uuid,
+          "starts_at" => "2026-07-11T09:00:00Z",
+          "ends_at" => "2026-07-11T10:00:00Z"
+        })
+
+      loc_bin = dump_uuid(location_uuid)
+
+      Repo.update_all(
+        from(l in "phoenix_kit_locations", where: l.uuid == ^loc_bin),
+        set: [name: "New HQ"]
+      )
+
+      # every read path resolves the CURRENT name from the uuid link
+      {:ok, loaded} = Events.get_event(scope, event.uuid)
+      assert loaded.location == "New HQ"
+
+      {:ok, [listed]} = Events.list_events(scope, alice.uuid, ~D[2026-07-11], ~D[2026-07-12])
+      assert listed.location == "New HQ"
+
+      # the DB row still holds the save-time snapshot — the fallback
+      assert Repo.one(
+               from(e in "phoenix_kit_calendar_events",
+                 where: e.title == "Board meeting",
+                 select: e.location
+               )
+             ) == "Old HQ"
+    end
+
+    test "a trashed linked location falls back to the snapshot", %{alice: alice} do
+      location_uuid = seed("phoenix_kit_locations", %{name: "Pop-up venue"})
+      scope = scope_for(alice, ["calendar"])
+
+      {:ok, event} =
+        Events.create_event(scope, alice.uuid, %{
+          "title" => "Launch",
+          "location_uuid" => location_uuid,
+          "starts_at" => "2026-07-11T09:00:00Z",
+          "ends_at" => "2026-07-11T10:00:00Z"
+        })
+
+      loc_bin = dump_uuid(location_uuid)
+
+      Repo.update_all(
+        from(l in "phoenix_kit_locations", where: l.uuid == ^loc_bin),
+        set: [status: "trashed"]
+      )
+
+      {:ok, loaded} = Events.get_event(scope, event.uuid)
+      assert loaded.location == "Pop-up venue"
+    end
   end
 end
