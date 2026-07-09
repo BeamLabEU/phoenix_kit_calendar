@@ -164,6 +164,46 @@ defmodule PhoenixKitCalendar.Web.CalendarLiveTest do
       assert html =~ ~s(value="#{today}T09:00)
     end
 
+    test "editing an all-day event shows the inclusive last day; an untouched save keeps dates",
+         %{conn: conn, me: me} do
+      today = Date.utc_today()
+
+      # two-day event: today + tomorrow (exclusive end = today+2)
+      {:ok, event} =
+        Events.create_event(scope_of(me, ["calendar"]), me.uuid, %{
+          "title" => "Offsite",
+          "all_day" => "true",
+          "starts_on" => Date.to_iso8601(today),
+          "ends_on" => Date.to_iso8601(Date.add(today, 2))
+        })
+
+      conn = login(conn, me, ["calendar"])
+      {:ok, view, _html} = live(conn, @path)
+
+      send(view.pid, {:calendar_event_click, event.uuid})
+      html = render(view)
+
+      # the form shows the INCLUSIVE last day (tomorrow), not the stored
+      # exclusive date — and not a double-shifted day-short value either
+      assert [_, shown] = Regex.run(~r/name="event\[ends_on\]"[^>]*value="([^"]+)"/, html)
+      assert shown == Date.to_iso8601(Date.add(today, 1))
+
+      # saving what the form shows must be a no-op on the stored dates
+      view
+      |> form("#calendar-event-form", %{
+        "event" => %{
+          "title" => "Offsite",
+          "all_day" => "true",
+          "starts_on" => Date.to_iso8601(today),
+          "ends_on" => shown
+        }
+      })
+      |> render_submit()
+
+      {:ok, saved} = Events.get_event(scope_of(me, ["calendar"]), event.uuid)
+      assert saved.ends_on == Date.add(today, 2)
+    end
+
     test "validation errors stay hidden until Save is attempted", %{conn: conn, me: me} do
       conn = login(conn, me, ["calendar"])
       {:ok, view, _html} = live(conn, @path)

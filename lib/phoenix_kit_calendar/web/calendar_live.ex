@@ -665,7 +665,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     |> assign(:new_event_owner, if(is_nil(event), do: default_new_owner(socket)))
     |> assign(:show_form_errors?, false)
     |> assign(:pending_participants, pending)
-    |> assign(:event_form, to_form(inclusive_end(changeset), as: "event"))
+    |> assign(:event_form, to_form(changeset, as: "event"))
     |> assign(:show_event_modal, true)
   end
 
@@ -703,15 +703,11 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     |> assign(:event_form, nil)
   end
 
-  defp inclusive_end(changeset) do
-    case Ecto.Changeset.get_field(changeset, :ends_on) do
-      %Date{} = ends_on ->
-        Ecto.Changeset.put_change(changeset, :ends_on, Date.add(ends_on, -1))
-
-      _ ->
-        changeset
-    end
-  end
+  # (The changeset always holds the EXCLUSIVE end — the inclusive "last
+  # day" conversion happens ONLY at render, via inclusive_end_display/1.
+  # A changeset-level shift here would stack with it: the edit form would
+  # show a day short and an untouched save would shrink the event by one
+  # day per open/save cycle.)
 
   # Toggling "All day" carries the values ACROSS the mode switch instead of
   # presenting empty fields: the date pair derives from the datetime pair
