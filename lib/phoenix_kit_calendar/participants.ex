@@ -31,6 +31,7 @@ defmodule PhoenixKitCalendar.Participants do
 
   alias PhoenixKit.RepoHelper
   alias PhoenixKit.Users.Auth.Scope
+  alias PhoenixKit.Users.Permissions
   alias PhoenixKitCalendar.Events
   alias PhoenixKitCalendar.Schemas.Event
   alias PhoenixKitCalendar.Schemas.Participant
@@ -60,7 +61,8 @@ defmodule PhoenixKitCalendar.Participants do
   but doesn't silently strip someone else's).
   """
   @spec replace_participants(Scope.t() | nil, Event.t(), [map()]) ::
-          {:ok, [Participant.t()]} | {:error, :unauthorized | Ecto.Changeset.t()}
+          {:ok, [Participant.t()]}
+          | {:error, :unauthorized | :invalid_participant | Ecto.Changeset.t()}
   def replace_participants(scope, %Event{} = event, entries) do
     entries = normalize_entries(entries)
     current = list_for_event(event.uuid)
@@ -78,7 +80,37 @@ defmodule PhoenixKitCalendar.Participants do
         {:error, :unauthorized}
 
       true ->
-        apply_diff(scope, event, added, removed)
+        case canonicalize_added(added) do
+          {:ok, added} -> apply_diff(scope, event, added, removed)
+          :error -> {:error, :invalid_participant}
+        end
+    end
+  end
+
+  # Server-side identity resolution (quorum HIGH finding): the persisted
+  # display_name comes from the SOURCE TABLE, never from the client, and a
+  # target that doesn't exist (or is soft-deleted) rejects the save — no
+  # spoofed labels, no uuid probing, no garbage rows.
+  defp canonicalize_added(added) do
+    added
+    |> Enum.reduce_while([], fn entry, acc ->
+      case canonicalize_entry(entry) do
+        {:ok, entry} -> {:cont, [entry | acc]}
+        :error -> {:halt, :error}
+      end
+    end)
+    |> case do
+      :error -> :error
+      entries -> {:ok, Enum.reverse(entries)}
+    end
+  end
+
+  defp canonicalize_entry(%{kind: "free_text"} = entry), do: {:ok, %{entry | target_uuid: nil}}
+
+  defp canonicalize_entry(entry) do
+    case Sources.canonical_name(entry.kind, entry.target_uuid) do
+      {:ok, name} -> {:ok, %{entry | display_name: name}}
+      :error -> :error
     end
   end
 
@@ -90,10 +122,15 @@ defmodule PhoenixKitCalendar.Participants do
   @spec kind_allowed?(Scope.t() | nil, String.t()) :: boolean()
   def kind_allowed?(_scope, "free_text"), do: true
   def kind_allowed?(scope, "user"), do: Scope.can?(scope, "calendar.invite_platform_users")
-  def kind_allowed?(scope, "staff_person"), do: Scope.can?(scope, "calendar.invite_staff")
+
+  # the invite permission COMPOSES with the source module's enablement —
+  # same rule the UI applies, enforced here so a forged event can't add
+  # staff/CRM kinds while those modules are disabled
+  def kind_allowed?(scope, "staff_person"),
+    do: Scope.can?(scope, "calendar.invite_staff") and Permissions.feature_enabled?("staff")
 
   def kind_allowed?(scope, kind) when kind in ["crm_contact", "crm_company"],
-    do: Scope.can?(scope, "calendar.invite_crm")
+    do: Scope.can?(scope, "calendar.invite_crm") and Permissions.feature_enabled?("crm")
 
   def kind_allowed?(_scope, _kind), do: false
 

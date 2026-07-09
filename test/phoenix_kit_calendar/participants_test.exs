@@ -10,11 +10,40 @@ defmodule PhoenixKitCalendar.ParticipantsTest do
   """
   use PhoenixKitCalendar.DataCase, async: false
 
+  alias PhoenixKit.ModuleRegistry
   alias PhoenixKit.Users.Auth
   alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKitCalendar.Events
   alias PhoenixKitCalendar.Participants
   alias PhoenixKitCalendar.Sources
+
+  defmodule FakeStaff do
+    def module_key, do: "staff"
+    def module_name, do: "Fake Staff"
+    def enabled?, do: true
+
+    def permission_metadata,
+      do: %{key: "staff", label: "Staff", icon: "hero-users", description: ""}
+  end
+
+  defmodule FakeCrm do
+    def module_key, do: "crm"
+    def module_name, do: "Fake CRM"
+    def enabled?, do: true
+    def permission_metadata, do: %{key: "crm", label: "CRM", icon: "hero-users", description: ""}
+  end
+
+  defp with_sibling_modules(_ctx) do
+    ModuleRegistry.register(FakeStaff)
+    ModuleRegistry.register(FakeCrm)
+
+    on_exit(fn ->
+      ModuleRegistry.unregister(FakeStaff)
+      ModuleRegistry.unregister(FakeCrm)
+    end)
+
+    :ok
+  end
 
   setup do
     {:ok, _} = PhoenixKitCalendar.enable_system()
@@ -145,6 +174,8 @@ defmodule PhoenixKitCalendar.ParticipantsTest do
   end
 
   describe "live visibility" do
+    setup :with_sibling_modules
+
     test "a user participant sees the event on their own calendar", %{
       alice: alice,
       bob: bob,
@@ -165,7 +196,8 @@ defmodule PhoenixKitCalendar.ParticipantsTest do
       bob: bob,
       event: event
     } do
-      person_uuid = seed("phoenix_kit_staff_people", %{user_uuid: dump_uuid(bob.uuid)})
+      person_uuid =
+        seed("phoenix_kit_staff_people", %{user_uuid: dump_uuid(bob.uuid), name: "Bob Staff"})
 
       {:ok, _} =
         Participants.replace_participants(
@@ -204,6 +236,25 @@ defmodule PhoenixKitCalendar.ParticipantsTest do
 
       assert "Kickoff" in visible_titles(bob)
 
+      # soft-deleting the COMPANY revokes members' visibility too
+      Repo.update_all(
+        from(co in "phoenix_kit_crm_companies",
+          where: co.uuid == type(^company_uuid, Ecto.UUID)
+        ),
+        set: [status: "trashed"]
+      )
+
+      refute "Kickoff" in visible_titles(bob)
+
+      Repo.update_all(
+        from(co in "phoenix_kit_crm_companies",
+          where: co.uuid == type(^company_uuid, Ecto.UUID)
+        ),
+        set: [status: "active"]
+      )
+
+      assert "Kickoff" in visible_titles(bob)
+
       # leaving the company revokes it just as automatically
       Repo.delete_all(
         from(m in "phoenix_kit_crm_company_memberships",
@@ -236,6 +287,59 @@ defmodule PhoenixKitCalendar.ParticipantsTest do
       # the rest of alice's calendar stays closed
       {from, until} = week_of()
       assert {:error, :unauthorized} = Events.list_events(bob_scope, alice.uuid, from, until)
+    end
+  end
+
+  describe "server-side identity resolution (spoofing defenses)" do
+    setup :with_sibling_modules
+
+    test "a spoofed display_name is replaced by the source table's name", %{
+      alice: alice,
+      bob: bob,
+      event: event
+    } do
+      assert {:ok, [p]} =
+               Participants.replace_participants(editor(alice), event, [
+                 %{
+                   kind: "user",
+                   target_uuid: bob.uuid,
+                   display_name: "CEO — meeting moved to 3pm"
+                 }
+               ])
+
+      # the persisted label is the user's real one, not the client's claim
+      assert p.display_name == bob.email
+    end
+
+    test "a fabricated target uuid rejects the save", %{alice: alice, event: event} do
+      assert {:error, :invalid_participant} =
+               Participants.replace_participants(editor(alice), event, [
+                 %{kind: "user", target_uuid: Ecto.UUID.generate(), display_name: "Ghost"}
+               ])
+
+      assert Participants.list_for_event(event.uuid) == []
+    end
+  end
+
+  describe "kind gating composes with module enablement" do
+    test "staff/CRM kinds are rejected while those modules are unavailable", %{
+      alice: alice,
+      event: event
+    } do
+      # no fake staff/crm modules registered here — enablement is false even
+      # though the permission is held
+      scope =
+        scope_for(alice, ["calendar", "calendar.invite_staff", "calendar.invite_crm"])
+
+      # gating rejects BEFORE any lookup — no row needed
+      assert {:error, :unauthorized} =
+               Participants.replace_participants(scope, event, [
+                 %{
+                   kind: "staff_person",
+                   target_uuid: Ecto.UUID.generate(),
+                   display_name: "Someone"
+                 }
+               ])
     end
   end
 

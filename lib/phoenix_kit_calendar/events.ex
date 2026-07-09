@@ -335,7 +335,9 @@ defmodule PhoenixKitCalendar.Events do
               OR (p.kind = 'crm_company' AND EXISTS (
                     SELECT 1 FROM phoenix_kit_crm_company_memberships m
                     JOIN phoenix_kit_crm_contacts c2 ON c2.uuid = m.contact_uuid
+                    JOIN phoenix_kit_crm_companies co ON co.uuid = m.company_uuid
                     WHERE m.company_uuid = p.target_uuid
+                      AND co.status <> 'trashed'
                       AND c2.status <> 'trashed'
                       AND c2.user_uuid = ANY(?)))
             )
@@ -361,7 +363,7 @@ defmodule PhoenixKitCalendar.Events do
       location_uuid ->
         name =
           from(l in "phoenix_kit_locations",
-            where: l.uuid == type(^location_uuid, UUIDv7),
+            where: l.uuid == type(^location_uuid, UUIDv7) and l.status != "trashed",
             select: l.name
           )
           |> repo().one()

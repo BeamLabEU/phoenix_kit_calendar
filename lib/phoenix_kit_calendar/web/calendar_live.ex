@@ -282,7 +282,10 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
   def handle_event("add_participant", %{"kind" => kind, "uuid" => uuid, "name" => name}, socket) do
     # the context re-validates on save; this guard keeps the UI honest
     if Participants.kind_allowed?(socket.assigns.scope, kind) do
-      entry = %{kind: kind, target_uuid: uuid, display_name: name}
+      # free_text never carries a target; the context canonicalizes the
+      # display_name for every other kind at save time regardless
+      target = if kind == "free_text", do: nil, else: uuid
+      entry = %{kind: kind, target_uuid: target, display_name: name}
       {:noreply, append_participant(socket, entry)}
     else
       {:noreply, socket}
@@ -301,8 +304,15 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
   end
 
   def handle_event("remove_participant", %{"idx" => idx}, socket) do
-    pending = List.delete_at(socket.assigns.pending_participants, String.to_integer(idx))
-    {:noreply, assign(socket, :pending_participants, pending)}
+    pending = socket.assigns.pending_participants
+
+    case Integer.parse(to_string(idx)) do
+      {i, ""} when i >= 0 and i < length(pending) ->
+        {:noreply, assign(socket, :pending_participants, List.delete_at(pending, i))}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("validate_event", %{"event" => event_params} = params, socket) do
@@ -352,11 +362,17 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
 
     case result do
       {:ok, event} ->
-        socket = save_participants(socket, event)
+        {socket, participants_ok?} = save_participants(socket, event)
+
+        socket =
+          if participants_ok? do
+            put_flash(socket, :info, Gettext.gettext(PhoenixKitWeb.Gettext, "Event saved"))
+          else
+            socket
+          end
 
         {:noreply,
          socket
-         |> put_flash(:info, Gettext.gettext(PhoenixKitWeb.Gettext, "Event saved"))
          |> close_modal()
          |> reload_events()
          |> reload_window_counts()}
@@ -687,14 +703,17 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
            socket.assigns.pending_participants
          ) do
       {:ok, _} ->
-        socket
+        {socket, true}
 
       {:error, _} ->
-        put_flash(
-          socket,
-          :error,
-          Gettext.gettext(PhoenixKitWeb.Gettext, "Some participants could not be saved")
-        )
+        {put_flash(
+           socket,
+           :error,
+           Gettext.gettext(
+             PhoenixKitWeb.Gettext,
+             "The event was saved, but its participants could not be — please reopen it and try again"
+           )
+         ), false}
     end
   end
 

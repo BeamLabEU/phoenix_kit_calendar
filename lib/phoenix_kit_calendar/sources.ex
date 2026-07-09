@@ -18,9 +18,12 @@ defmodule PhoenixKitCalendar.Sources do
   ## Leak hygiene (quorum-hardened)
 
   Searches require a minimum of #{2} characters, cap results per source,
-  return only `{kind, target uuid, display name}` — never emails, phones,
-  or profile data beyond the label — and exclude soft-deleted rows
-  (`status = 'trashed'`).
+  return only `{kind, target uuid, display name}` — no phones or profile
+  data beyond the label — and exclude soft-deleted rows
+  (`status = 'trashed'`). A user's label falls back to their email when
+  no name is set, matching how users are identified everywhere else in
+  the admin (the person panel, the users list); pickers therefore expose
+  emails exactly as far as the rest of the admin already does.
   """
 
   import Ecto.Query
@@ -163,6 +166,7 @@ defmodule PhoenixKitCalendar.Sources do
   def list_locations do
     if locations_available?() do
       from(l in "phoenix_kit_locations",
+        where: l.status != "trashed",
         order_by: [asc: l.name],
         limit: 100,
         select: %{uuid: type(l.uuid, UUIDv7), name: l.name}
@@ -174,6 +178,51 @@ defmodule PhoenixKitCalendar.Sources do
   rescue
     _ -> []
   end
+
+  @doc """
+  Resolves the CANONICAL display name for a participant target from its
+  source table — `{:ok, name}` or `:error` when the target doesn't exist
+  (or is soft-deleted). `Participants` calls this at insert time so a
+  client can never store a spoofed label or a fabricated uuid: whatever
+  the picker claimed, the persisted name is what the source table says.
+  """
+  @spec canonical_name(String.t(), String.t()) :: {:ok, String.t()} | :error
+  def canonical_name("user", target_uuid) do
+    from(u in "phoenix_kit_users",
+      where: u.uuid == type(^target_uuid, UUIDv7) and u.is_active == true,
+      select: %{email: u.email, first_name: u.first_name, last_name: u.last_name}
+    )
+    |> repo().one()
+    |> case do
+      nil -> :error
+      user -> {:ok, user_label(user)}
+    end
+  rescue
+    _ -> :error
+  end
+
+  def canonical_name(kind, target_uuid)
+      when kind in ["staff_person", "crm_contact", "crm_company"] do
+    {table, _} = kind_table(kind)
+
+    from(r in table,
+      where: r.uuid == type(^target_uuid, UUIDv7) and r.status != "trashed",
+      select: r.name
+    )
+    |> repo().one()
+    |> case do
+      name when is_binary(name) and name != "" -> {:ok, name}
+      _ -> :error
+    end
+  rescue
+    _ -> :error
+  end
+
+  def canonical_name(_kind, _target), do: :error
+
+  defp kind_table("staff_person"), do: {"phoenix_kit_staff_people", :name}
+  defp kind_table("crm_contact"), do: {"phoenix_kit_crm_contacts", :name}
+  defp kind_table("crm_company"), do: {"phoenix_kit_crm_companies", :name}
 
   @doc """
   Live-resolves the platform user a participant entry maps to right now —
