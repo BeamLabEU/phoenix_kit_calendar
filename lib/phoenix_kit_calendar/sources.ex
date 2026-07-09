@@ -104,25 +104,16 @@ defmodule PhoenixKitCalendar.Sources do
 
     from(sp in "phoenix_kit_staff_people",
       where: sp.status != "trashed",
-      where:
-        ilike(fragment("COALESCE(?, '')", sp.first_name), ^pattern) or
-          ilike(fragment("COALESCE(?, '')", sp.last_name), ^pattern),
-      order_by: [asc: sp.last_name],
+      where: ilike(fragment("COALESCE(?, '')", sp.name), ^pattern),
+      order_by: [asc: sp.name],
       limit: @per_source_cap,
-      select: %{
-        uuid: type(sp.uuid, UUIDv7),
-        first_name: sp.first_name,
-        last_name: sp.last_name
-      }
+      select: %{uuid: type(sp.uuid, UUIDv7), name: sp.name}
     )
     |> repo().all()
     |> Enum.map(fn sp ->
-      %{
-        kind: "staff_person",
-        target_uuid: sp.uuid,
-        display_name: String.trim("#{sp.first_name || ""} #{sp.last_name || ""}")
-      }
+      %{kind: "staff_person", target_uuid: sp.uuid, display_name: sp.name || ""}
     end)
+    |> Enum.reject(&(&1.display_name == ""))
   rescue
     _ -> []
   end
@@ -132,25 +123,16 @@ defmodule PhoenixKitCalendar.Sources do
 
     from(c in "phoenix_kit_crm_contacts",
       where: c.status != "trashed",
-      where:
-        ilike(fragment("COALESCE(?, '')", c.first_name), ^pattern) or
-          ilike(fragment("COALESCE(?, '')", c.last_name), ^pattern),
-      order_by: [asc: c.last_name],
+      where: ilike(fragment("COALESCE(?, '')", c.name), ^pattern),
+      order_by: [asc: c.name],
       limit: @per_source_cap,
-      select: %{
-        uuid: type(c.uuid, UUIDv7),
-        first_name: c.first_name,
-        last_name: c.last_name
-      }
+      select: %{uuid: type(c.uuid, UUIDv7), name: c.name}
     )
     |> repo().all()
     |> Enum.map(fn c ->
-      %{
-        kind: "crm_contact",
-        target_uuid: c.uuid,
-        display_name: String.trim("#{c.first_name || ""} #{c.last_name || ""}")
-      }
+      %{kind: "crm_contact", target_uuid: c.uuid, display_name: c.name || ""}
     end)
+    |> Enum.reject(&(&1.display_name == ""))
   rescue
     _ -> []
   end
