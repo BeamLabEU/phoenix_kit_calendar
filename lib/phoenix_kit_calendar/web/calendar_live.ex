@@ -103,6 +103,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
       |> assign(:editing_event, nil)
       |> assign(:can_edit_event?, false)
       |> assign(:new_event_owner, nil)
+      |> assign(:show_form_errors?, false)
       |> assign(:event_form, nil)
 
     {:ok, socket}
@@ -255,10 +256,17 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
   end
 
   def handle_event("validate_event", %{"event" => event_params} = params, socket) do
+    # phx-change keeps the form synced (the all-day toggle swaps the
+    # date/datetime inputs; the owner picker drives the off-view warning),
+    # but validation errors stay HIDDEN until the first save attempt —
+    # a changeset without an action renders no errors. After a failed
+    # save they update live while the user fixes the form.
+    action = if socket.assigns.show_form_errors?, do: :validate, else: nil
+
     changeset =
       (socket.assigns.editing_event || %Event{})
       |> Event.changeset(normalize_params(event_params))
-      |> Map.put(:action, :validate)
+      |> Map.put(:action, action)
 
     {:noreply,
      socket
@@ -305,7 +313,10 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
          |> close_modal()}
 
       {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply, assign(socket, :event_form, to_form(changeset, as: "event"))}
+        {:noreply,
+         socket
+         |> assign(:show_form_errors?, true)
+         |> assign(:event_form, to_form(changeset, as: "event"))}
     end
   end
 
@@ -506,6 +517,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     |> assign(:editing_event, event)
     |> assign(:can_edit_event?, can_edit_event?)
     |> assign(:new_event_owner, if(is_nil(event), do: default_new_owner(socket)))
+    |> assign(:show_form_errors?, false)
     |> assign(:event_form, to_form(inclusive_end(changeset), as: "event"))
     |> assign(:show_event_modal, true)
   end
@@ -539,6 +551,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     |> assign(:editing_event, nil)
     |> assign(:can_edit_event?, false)
     |> assign(:new_event_owner, nil)
+    |> assign(:show_form_errors?, false)
     |> assign(:event_form, nil)
   end
 

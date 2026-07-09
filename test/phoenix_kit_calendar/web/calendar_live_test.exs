@@ -105,6 +105,37 @@ defmodule PhoenixKitCalendar.Web.CalendarLiveTest do
       assert event.owner_uuid == me.uuid
     end
 
+    test "validation errors stay hidden until Save is attempted", %{conn: conn, me: me} do
+      conn = login(conn, me, ["calendar"])
+      {:ok, view, _html} = live(conn, @path)
+
+      view |> element("button", "New event") |> render_click()
+
+      # editing the form (empty title) shows NO errors yet
+      html =
+        view
+        |> form("#calendar-event-form", %{"event" => %{"title" => ""}})
+        |> render_change()
+
+      refute html =~ "blank"
+
+      # first save attempt surfaces them
+      html =
+        view
+        |> form("#calendar-event-form", %{"event" => %{"title" => ""}})
+        |> render_submit()
+
+      assert html =~ "blank"
+
+      # and from then on they update live while fixing
+      html =
+        view
+        |> form("#calendar-event-form", %{"event" => %{"title" => "Fixed"}})
+        |> render_change()
+
+      refute html =~ "blank"
+    end
+
     test "?people= is ignored without view_others", %{conn: conn, me: me, other: other} do
       conn = login(conn, me, ["calendar"])
       {:ok, _view, html} = live(conn, "#{@path}?people=#{other.uuid}")
