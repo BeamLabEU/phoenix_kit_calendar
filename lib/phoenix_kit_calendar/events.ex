@@ -32,6 +32,7 @@ defmodule PhoenixKitCalendar.Events do
 
   alias PhoenixKit.RepoHelper
   alias PhoenixKit.Users.Auth.Scope
+  alias PhoenixKit.Users.Permissions
   alias PhoenixKitCalendar.Schemas.Event
 
   @base_key "calendar"
@@ -177,18 +178,29 @@ defmodule PhoenixKitCalendar.Events do
 
       %Event{} = event ->
         cond do
-          authorize(scope, event.owner_uuid, :view) == :ok -> {:ok, event}
+          authorize(scope, event.owner_uuid, :view) == :ok ->
+            {:ok, event}
+
           # being a participant grants visibility of THIS event only —
-          # never of the rest of the owner's calendar
-          participant?(scope, event) -> {:ok, event}
-          true -> {:error, :unauthorized}
+          # never of the rest of the owner's calendar — and, like every
+          # other path, only while the calendar module is enabled
+          # (boss's call 2026-07-09: module off disables everything)
+          calendar_enabled?() and participant?(scope, event) ->
+            {:ok, event}
+
+          true ->
+            {:error, :unauthorized}
         end
     end
   end
 
+  defp calendar_enabled?, do: Permissions.feature_enabled?("calendar")
+
   @doc """
   Whether the scope's user currently resolves as a participant of the
-  event (live — see `participant_visible_dynamic/1`).
+  event (live — see `participant_visible_dynamic/1`). A pure predicate:
+  callers making ACCESS decisions must combine it with module enablement,
+  as `get_event/2` does.
   """
   @spec participant?(Scope.t() | nil, Event.t()) :: boolean()
   def participant?(scope, %Event{} = event) do

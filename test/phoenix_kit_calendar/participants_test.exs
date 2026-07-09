@@ -287,6 +287,11 @@ defmodule PhoenixKitCalendar.ParticipantsTest do
       # the rest of alice's calendar stays closed
       {from, until} = week_of()
       assert {:error, :unauthorized} = Events.list_events(bob_scope, alice.uuid, from, until)
+
+      # disabling the module seals EVERYTHING — including a participant's
+      # single-event access (boss's call 2026-07-09)
+      {:ok, _} = PhoenixKitCalendar.disable_system()
+      assert {:error, :unauthorized} = Events.get_event(bob_scope, event.uuid)
     end
   end
 
