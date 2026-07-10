@@ -1526,7 +1526,10 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
               </div>
             </fieldset>
 
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <%!-- Status only makes sense when editing — you don't create an
+                 already-cancelled event. The meaningful states are just
+                 active vs cancelled (stored "confirmed"/"cancelled"). --%>
+            <div :if={@editing_event} class="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <.select
                 field={@event_form[:status]}
                 label={Gettext.gettext(PhoenixKitWeb.Gettext, "Status")}
@@ -1954,9 +1957,11 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     end
   end
 
+  # Stored values stay "confirmed"/"cancelled" (V141 CHECK); "confirmed"
+  # reads as "Active" — the meaningful distinction is active vs cancelled.
   defp status_options do
     [
-      {Gettext.gettext(PhoenixKitWeb.Gettext, "Confirmed"), "confirmed"},
+      {Gettext.gettext(PhoenixKitWeb.Gettext, "Active"), "confirmed"},
       {Gettext.gettext(PhoenixKitWeb.Gettext, "Cancelled"), "cancelled"}
     ]
   end

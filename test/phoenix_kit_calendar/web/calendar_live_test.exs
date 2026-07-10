@@ -73,6 +73,25 @@ defmodule PhoenixKitCalendar.Web.CalendarLiveTest do
       assert html =~ "Visible standup"
     end
 
+    test "status field is edit-only (Active/Cancelled), absent when creating",
+         %{conn: conn, me: me} do
+      event = create_timed(me, "Standup", ~T[09:00:00], ~T[10:00:00])
+      conn = login(conn, me, ["calendar"])
+      {:ok, view, _html} = live(conn, @path)
+
+      # creating: no status field at all (no cancelled-on-create)
+      view |> element("button", "New event") |> render_click()
+      refute render(view) =~ ~s(name="event[status]")
+
+      # editing: the status field appears, labelled Active/Cancelled
+      send(view.pid, {:calendar_event_click, event.uuid})
+      html = render(view)
+      assert html =~ ~s(name="event[status]")
+      assert html =~ "Active"
+      assert html =~ "Cancelled"
+      refute html =~ "Confirmed"
+    end
+
     test "creates an event through the modal form", %{conn: conn, me: me} do
       conn = login(conn, me, ["calendar"])
       {:ok, view, _html} = live(conn, @path)
