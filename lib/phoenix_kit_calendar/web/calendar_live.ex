@@ -1488,7 +1488,8 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
 
             <%!-- Color: radio swatches (sr-only inputs, ring on the checked
                  dot) + a live chip previewing how the event reads on the
-                 grid. "Default" is the distinct slashed swatch. --%>
+                 grid. No "Default" swatch — a color-less event renders the
+                 same blue as the first swatch, so Blue IS the default. --%>
             <fieldset>
               <legend class="label">
                 <span class="label-text font-semibold">
@@ -1496,20 +1497,6 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
                 </span>
               </legend>
               <div class="flex flex-wrap items-center gap-2">
-                <label class="cursor-pointer" title={Gettext.gettext(PhoenixKitWeb.Gettext, "Default")}>
-                  <input
-                    type="radio"
-                    name={@event_form[:color].name}
-                    value=""
-                    checked={color_value(@event_form) == ""}
-                    class="sr-only peer"
-                  />
-                  <span class="relative block w-7 h-7 rounded-full border-2 border-base-content/20 bg-base-100 overflow-hidden peer-checked:ring-2 peer-checked:ring-primary peer-checked:ring-offset-2 peer-checked:ring-offset-base-100 peer-focus-visible:ring-2 peer-focus-visible:ring-primary">
-                    <span class="absolute left-1/2 top-1/2 w-8 h-0.5 bg-base-content/30 -translate-x-1/2 -translate-y-1/2 rotate-45">
-                    </span>
-                  </span>
-                  <span class="sr-only">{Gettext.gettext(PhoenixKitWeb.Gettext, "Default")}</span>
-                </label>
                 <label :for={choice <- color_choices()} class="cursor-pointer" title={choice.label}>
                   <input
                     type="radio"
@@ -1943,7 +1930,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
   end
 
   # What the preview chip (and the grid) shows for the current selection;
-  # "" / nil = the grid's default rendering for a color-less event.
+  # an unset color falls back to blue, the same as the grid renders it.
   defp preview_colors(value) do
     case Enum.find(color_choices(), &(&1.value == value)) do
       nil -> {"bg-primary", "text-primary-content"}
@@ -1951,7 +1938,14 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     end
   end
 
-  defp color_value(form), do: to_string(form[:color].value || "")
+  # The selected swatch. A color-less event (nil/"" — a fresh event or a
+  # legacy row) renders blue on the grid, so the Blue swatch shows selected.
+  defp color_value(form) do
+    case to_string(form[:color].value || "") do
+      "" -> "bg-primary"
+      color -> color
+    end
+  end
 
   defp preview_title(form) do
     case String.trim(to_string(form[:title].value || "")) do
