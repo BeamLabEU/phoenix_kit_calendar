@@ -1574,16 +1574,59 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
           </div>
         <% end %>
         <% else %>
-          <%!-- Skeleton while the opening click's round-trip is in flight --%>
-          <div class="space-y-3 py-2" aria-busy="true">
-            <div class="h-10 bg-base-content/10 rounded animate-pulse"></div>
-            <div class="grid grid-cols-2 gap-3">
-              <div class="h-10 bg-base-content/10 rounded animate-pulse"></div>
-              <div class="h-10 bg-base-content/10 rounded animate-pulse"></div>
+          <%!-- Skeleton mirroring the real form's field layout so the brief
+               wait reads as the form materializing, not a generic spinner.
+               Order matches the fields below: title, all-day, date/time row,
+               location, description, color swatches, status, participants. --%>
+          <div class="space-y-3 py-1 animate-pulse" aria-busy="true" aria-label="Loading event form">
+            <%!-- Title --%>
+            <div class="space-y-1.5">
+              <div class="h-3 w-12 bg-base-content/10 rounded"></div>
+              <div class="h-10 bg-base-content/10 rounded-lg"></div>
             </div>
-            <div class="h-20 bg-base-content/10 rounded animate-pulse"></div>
-            <div class="flex justify-center pt-2">
-              <span class="loading loading-spinner loading-md text-base-content/40"></span>
+            <%!-- All day --%>
+            <div class="flex items-center gap-2">
+              <div class="h-4 w-4 bg-base-content/10 rounded"></div>
+              <div class="h-3 w-14 bg-base-content/10 rounded"></div>
+            </div>
+            <%!-- Start / end --%>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div class="space-y-1.5">
+                <div class="h-3 w-14 bg-base-content/10 rounded"></div>
+                <div class="h-10 bg-base-content/10 rounded-lg"></div>
+              </div>
+              <div class="space-y-1.5">
+                <div class="h-3 w-14 bg-base-content/10 rounded"></div>
+                <div class="h-10 bg-base-content/10 rounded-lg"></div>
+              </div>
+            </div>
+            <%!-- Location --%>
+            <div class="space-y-1.5">
+              <div class="h-3 w-16 bg-base-content/10 rounded"></div>
+              <div class="h-10 bg-base-content/10 rounded-lg"></div>
+            </div>
+            <%!-- Description --%>
+            <div class="space-y-1.5">
+              <div class="h-3 w-20 bg-base-content/10 rounded"></div>
+              <div class="h-20 bg-base-content/10 rounded-lg"></div>
+            </div>
+            <%!-- Color swatches + preview --%>
+            <div class="space-y-2">
+              <div class="h-3 w-10 bg-base-content/10 rounded"></div>
+              <div class="flex flex-wrap gap-2">
+                <div :for={_ <- 1..9} class="h-7 w-7 bg-base-content/10 rounded-full"></div>
+              </div>
+              <div class="h-3 w-40 bg-base-content/10 rounded"></div>
+            </div>
+            <%!-- Status --%>
+            <div class="space-y-1.5">
+              <div class="h-3 w-12 bg-base-content/10 rounded"></div>
+              <div class="h-10 sm:w-1/2 bg-base-content/10 rounded-lg"></div>
+            </div>
+            <%!-- Participants --%>
+            <div class="space-y-1.5 pt-1">
+              <div class="h-3 w-20 bg-base-content/10 rounded"></div>
+              <div class="h-8 bg-base-content/10 rounded-lg"></div>
             </div>
           </div>
         <% end %>
