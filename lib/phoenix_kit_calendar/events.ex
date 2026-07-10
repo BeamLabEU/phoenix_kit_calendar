@@ -40,6 +40,18 @@ defmodule PhoenixKitCalendar.Events do
   @view_others "calendar.view_others"
   @edit_others "calendar.edit_others"
 
+  # Single PubSub topic for live cross-session updates. Subscribers filter the
+  # `{:calendar_event_changed, owner_uuid}` payload against their current view.
+  @pubsub_topic "phoenix_kit_calendar:events"
+
+  @doc """
+  The PubSub topic carrying `{:calendar_event_changed, owner_uuid}` after every
+  committed create/update/delete. A LiveView showing calendars subscribes and
+  reloads when a change lands for an owner in its current view.
+  """
+  @spec pubsub_topic() :: String.t()
+  def pubsub_topic, do: @pubsub_topic
+
   # ===========================================================================
   # Authorization
   # ===========================================================================
@@ -111,9 +123,7 @@ defmodule PhoenixKitCalendar.Events do
       events =
         from(e in Event,
           where: ^visible,
-          where:
-            (not e.all_day and e.starts_at < ^until_dt and e.ends_at > ^from_dt) or
-              (e.all_day and e.starts_on < ^until and e.ends_on > ^from),
+          where: ^overlapping_window(from, until, from_dt, until_dt),
           order_by: [asc: e.starts_at, asc: e.starts_on]
         )
         |> repo().all()
@@ -142,9 +152,7 @@ defmodule PhoenixKitCalendar.Events do
 
       events =
         from(e in Event,
-          where:
-            (not e.all_day and e.starts_at < ^until_dt and e.ends_at > ^from_dt) or
-              (e.all_day and e.starts_on < ^until and e.ends_on > ^from),
+          where: ^overlapping_window(from, until, from_dt, until_dt),
           order_by: [asc: e.starts_at, asc: e.starts_on]
         )
         |> maybe_filter_owners(Keyword.get(opts, :owner_uuids))
@@ -208,7 +216,9 @@ defmodule PhoenixKitCalendar.Events do
   defp safe_get(uuid) do
     repo().get(Event, uuid)
   rescue
-    _ -> nil
+    # A non-UUID id → CastError → treat as "no such event". A real DB error
+    # is left to propagate rather than masquerading as :not_found.
+    Ecto.Query.CastError -> nil
   end
 
   defp calendar_enabled?, do: Permissions.feature_enabled?("calendar")
@@ -235,13 +245,17 @@ defmodule PhoenixKitCalendar.Events do
   end
 
   @doc """
-  Map of `owner_uuid => event count` across all calendars. Requires
-  cross-calendar read access (`calendar.view_others` /
+  Map of `owner_uuid => count of events they OWN` across all calendars.
+  Requires cross-calendar read access (`calendar.view_others` /
   `calendar.edit_others`).
 
   Pass a `from`/`until` date window to count only events overlapping it —
-  that powers the person panel's "empty (this view)" badge, which follows
-  the visible range rather than all time.
+  that powers the person panel's "empty" badge, which flags a person whose
+  own calendar has no events in the visible range. The count is
+  ownership-scoped by design: the badge answers "is this CALENDAR empty
+  here" (the panel picks calendars to view), not "would soloing them show
+  nothing" — soloing additionally overlays events on OTHER calendars they
+  merely participate in, which belong to those owners' counts.
   """
   @spec count_events_by_owner(Scope.t() | nil, Date.t() | nil, Date.t() | nil, keyword()) ::
           {:ok, %{String.t() => non_neg_integer()}} | {:error, :unauthorized}
@@ -264,15 +278,21 @@ defmodule PhoenixKitCalendar.Events do
 
   defp maybe_window(query, %Date{} = from, %Date{} = until, viewer_tz) do
     {from_dt, until_dt} = window_bounds(from, until, viewer_tz)
-
-    from(e in query,
-      where:
-        (not e.all_day and e.starts_at < ^until_dt and e.ends_at > ^from_dt) or
-          (e.all_day and e.starts_on < ^until and e.ends_on > ^from)
-    )
+    from(e in query, where: ^overlapping_window(from, until, from_dt, until_dt))
   end
 
   defp maybe_window(query, _from, _until, _viewer_tz), do: query
+
+  # Half-open `[from, until)` overlap for BOTH timed events (UTC datetime pair)
+  # and all-day events (date pair). Defined once so every windowed query agrees
+  # — the three views must match bit-for-bit or they'd disagree on edges.
+  defp overlapping_window(from, until, from_dt, until_dt) do
+    dynamic(
+      [e],
+      (not e.all_day and e.starts_at < ^until_dt and e.ends_at > ^from_dt) or
+        (e.all_day and e.starts_on < ^until and e.ends_on > ^from)
+    )
+  end
 
   # The UTC instants bounding a VIEWER-LOCAL day window. Timed events are
   # stored in UTC and displayed shifted by the viewer offset, so the viewer's
@@ -319,7 +339,7 @@ defmodule PhoenixKitCalendar.Events do
   different calendar because `owner_uuid` is not castable.
   """
   @spec update_event(Scope.t() | nil, Event.t(), map(), keyword()) ::
-          {:ok, Event.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+          {:ok, Event.t()} | {:error, :unauthorized | :not_found | Ecto.Changeset.t()}
   def update_event(scope, %Event{} = event, attrs, opts \\ []) do
     # Reload and authorize the PERSISTED owner, not the caller's in-memory
     # struct: Ecto updates by primary key, so a struct carrying a forged
@@ -339,7 +359,7 @@ defmodule PhoenixKitCalendar.Events do
   Deletes an event. Same load-then-authorize rule as `update_event/4`.
   """
   @spec delete_event(Scope.t() | nil, Event.t(), keyword()) ::
-          {:ok, Event.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+          {:ok, Event.t()} | {:error, :unauthorized | :not_found | Ecto.Changeset.t()}
   def delete_event(scope, %Event{} = event, opts \\ []) do
     with {:ok, fresh} <- reload_and_authorize(scope, event, :edit) do
       fresh
@@ -509,10 +529,25 @@ defmodule PhoenixKitCalendar.Events do
       })
     end
 
+    broadcast_event_changed(event.owner_uuid)
     result
   rescue
     _ -> result
   end
 
   defp tap_log(result, _action, _scope, _opts), do: result
+
+  # Announce a committed change with a minimal payload (owner uuid only — no
+  # record, no PII). No-op when the host configures no PubSub server.
+  defp broadcast_event_changed(owner_uuid) do
+    case PhoenixKit.Config.pubsub_server() do
+      nil ->
+        :ok
+
+      pubsub ->
+        Phoenix.PubSub.broadcast(pubsub, @pubsub_topic, {:calendar_event_changed, owner_uuid})
+    end
+  rescue
+    _ -> :ok
+  end
 end

@@ -40,9 +40,11 @@ defmodule PhoenixKitCalendar.Schemas.Participant do
   end
 
   @doc "Allowed participant kinds."
+  @spec kinds() :: [String.t()]
   def kinds, do: @kinds
 
   @doc false
+  @spec changeset(t() | Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
   def changeset(participant, attrs) do
     participant
     |> cast(attrs, [:event_uuid, :kind, :target_uuid, :display_name, :added_by_uuid])

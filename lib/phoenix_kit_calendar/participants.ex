@@ -28,6 +28,7 @@ defmodule PhoenixKitCalendar.Participants do
   """
 
   import Ecto.Query
+  use Gettext, backend: PhoenixKitWeb.Gettext
 
   alias PhoenixKit.RepoHelper
   alias PhoenixKit.Users.Auth.Scope
@@ -76,7 +77,7 @@ defmodule PhoenixKitCalendar.Participants do
   """
   @spec replace_participants(Scope.t() | nil, Event.t(), [map()]) ::
           {:ok, [Participant.t()]}
-          | {:error, :unauthorized | :invalid_participant | Ecto.Changeset.t()}
+          | {:error, :not_found | :unauthorized | :invalid_participant | Ecto.Changeset.t()}
   def replace_participants(scope, %Event{} = event, entries) do
     entries = normalize_entries(entries)
 
@@ -137,7 +138,9 @@ defmodule PhoenixKitCalendar.Participants do
       from(p in Participant, where: p.uuid in ^removed_uuids) |> repo().delete_all()
     end
 
-    added_by = scope && Scope.user_uuid(scope)
+    # `apply_replace` is only reached after `can_edit?` passed, which is
+    # false for a nil scope — so scope is a real `%Scope{}` here.
+    added_by = Scope.user_uuid(scope)
     Enum.each(added, &insert_participant!(event, &1, added_by))
 
     {raw_list_for_event(event.uuid), added}
@@ -253,10 +256,7 @@ defmodule PhoenixKitCalendar.Participants do
   end
 
   defp notification_text do
-    Gettext.gettext(
-      PhoenixKitWeb.Gettext,
-      "You were added to an event — it's now on your calendar"
-    )
+    gettext("You were added to an event — it's now on your calendar")
   end
 
   defp normalize_entries(entries) do
@@ -274,10 +274,17 @@ defmodule PhoenixKitCalendar.Participants do
 
   # free_text rows key on the lowercased name (mirrors the partial unique);
   # targeted rows key on kind+target.
-  defp entry_key(%{kind: "free_text", display_name: name}),
+  @doc """
+  Dedup/identity key for a participant entry — free-text keys on the
+  downcased name, everything else on `{kind, target_uuid}`. This MUST mirror
+  the DB partial-unique index; the LiveView's pending-chip dedup reuses it so
+  the two can't drift.
+  """
+  @spec entry_key(map()) :: {String.t(), String.t()}
+  def entry_key(%{kind: "free_text", display_name: name}),
     do: {"free_text", String.downcase(name)}
 
-  defp entry_key(%{kind: kind, target_uuid: target}), do: {kind, to_string(target)}
+  def entry_key(%{kind: kind, target_uuid: target}), do: {kind, to_string(target)}
 
   defp repo, do: RepoHelper.repo()
 end

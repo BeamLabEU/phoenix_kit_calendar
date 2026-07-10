@@ -13,10 +13,14 @@ defmodule PhoenixKitCalendar.Web.UpcomingWidget do
   dashboard.
   """
   use Phoenix.LiveComponent
+  use Gettext, backend: PhoenixKitWeb.Gettext
 
   alias PhoenixKitCalendar.Schemas.Event
   alias PhoenixKitCalendar.Web.WidgetSupport
   alias PhoenixKitWeb.Components.Core.EmptyState
+
+  # How far ahead the widget looks for "upcoming" events.
+  @horizon_days 60
 
   @impl true
   def update(assigns, socket) do
@@ -40,7 +44,7 @@ defmodule PhoenixKitCalendar.Web.UpcomingWidget do
     now = DateTime.utc_now()
 
     scope
-    |> WidgetSupport.fetch_events(today, Date.add(today, 60))
+    |> WidgetSupport.fetch_events(today, Date.add(today, @horizon_days))
     |> Enum.reject(&past?(&1, now, today))
     |> Enum.sort_by(&WidgetSupport.sort_key/1)
     |> Enum.take(limit)
@@ -75,7 +79,7 @@ defmodule PhoenixKitCalendar.Web.UpcomingWidget do
         <%= if @events == [] do %>
           <div class="flex items-center justify-center h-full">
             <EmptyState.empty_state
-              title="No upcoming events"
+              title={gettext("No upcoming events")}
               icon="hero-calendar-days"
               variant="compact"
             />

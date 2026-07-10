@@ -11,6 +11,7 @@ defmodule PhoenixKitCalendar.Web.TodayAgendaWidget do
   state rather than crashing the host dashboard.
   """
   use Phoenix.LiveComponent
+  use Gettext, backend: PhoenixKitWeb.Gettext
 
   alias PhoenixKitCalendar.Schemas.Event
   alias PhoenixKitCalendar.Web.WidgetSupport
@@ -53,7 +54,7 @@ defmodule PhoenixKitCalendar.Web.TodayAgendaWidget do
         <%= if @events == [] do %>
           <div class="flex items-center justify-center flex-1">
             <EmptyState.empty_state
-              title="Nothing scheduled today"
+              title={gettext("Nothing scheduled today")}
               icon="hero-calendar-days"
               variant="compact"
             />
@@ -77,7 +78,7 @@ defmodule PhoenixKitCalendar.Web.TodayAgendaWidget do
     """
   end
 
-  defp time_label(%Event{all_day: true}, _tz), do: "All day"
+  defp time_label(%Event{all_day: true}, _tz), do: gettext("All day")
 
   defp time_label(%Event{} = event, tz) do
     event.starts_at

@@ -333,7 +333,18 @@ defmodule PhoenixKitCalendar.Sources do
 
   def resolve_user(_), do: nil
 
-  defp user_label(%{first_name: first, last_name: last, email: email}) do
+  @doc """
+  A person's display label: "First Last", falling back to the email when no
+  name is set. Shared by the search sources and the calendar's people panel so
+  both render identities the same way.
+  """
+  @spec user_label(%{
+          optional(any()) => any(),
+          first_name: String.t() | nil,
+          last_name: String.t() | nil,
+          email: String.t()
+        }) :: String.t()
+  def user_label(%{first_name: first, last_name: last, email: email}) do
     case String.trim("#{first || ""} #{last || ""}") do
       "" -> email
       name -> name

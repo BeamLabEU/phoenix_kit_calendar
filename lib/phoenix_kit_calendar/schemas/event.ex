@@ -61,15 +61,18 @@ defmodule PhoenixKitCalendar.Schemas.Event do
   end
 
   @doc "Allowed status values."
+  @spec statuses() :: [String.t()]
   def statuses, do: @statuses
 
   @doc "Allowed color classes (daisyUI backgrounds the calendar can style)."
+  @spec colors() :: [String.t()]
   def colors, do: @colors
 
   @doc """
   Changeset for create/update. `owner_uuid` is not castable — see the
   moduledoc.
   """
+  @spec changeset(t() | Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
   def changeset(event, attrs) do
     event
     |> cast(attrs, [
