@@ -166,6 +166,32 @@ defmodule PhoenixKitCalendar.Web.CalendarLiveTest do
       assert html =~ ~s(value="#{today}T09:00)
     end
 
+    test "a timed event ending at exactly midnight carries a single all-day date",
+         %{conn: conn, me: me} do
+      conn = login(conn, me, ["calendar"])
+      {:ok, view, _html} = live(conn, @path)
+
+      view |> element("button", "New event") |> render_click()
+      today = Date.utc_today()
+      tomorrow = Date.add(today, 1)
+
+      # 23:00 → 00:00 exclusive touches ONLY today; toggling all-day must
+      # not gain a day (external review finding)
+      html =
+        view
+        |> form("#calendar-event-form", %{
+          "event" => %{
+            "all_day" => "true",
+            "starts_at" => "#{Date.to_iso8601(today)}T23:00",
+            "ends_at" => "#{Date.to_iso8601(tomorrow)}T00:00"
+          }
+        })
+        |> render_change()
+
+      assert [_, shown_end] = Regex.run(~r/name="event\[ends_on\]"[^>]*value="([^"]+)"/, html)
+      assert shown_end == Date.to_iso8601(today)
+    end
+
     test "editing an all-day event shows the inclusive last day; an untouched save keeps dates",
          %{conn: conn, me: me} do
       today = Date.utc_today()

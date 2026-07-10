@@ -905,9 +905,32 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
   defp carry_dates_from_times(params) do
     params
     |> carry(fn -> {"starts_on", date_part(params["starts_at"])} end)
-    |> carry(fn ->
-      {"ends_on", date_part(params["ends_at"]) || date_part(params["starts_at"])}
-    end)
+    |> carry(fn -> {"ends_on", carried_inclusive_end(params)} end)
+  end
+
+  # The inclusive last day derived from the timed pair. An EXCLUSIVE end
+  # at exactly midnight touches only the PREVIOUS day (23:00 → 00:00 is a
+  # one-day event), so the carried date steps back — clamped to the start
+  # date (external review finding: without this, toggling such an event
+  # to all-day silently gained a day).
+  defp carried_inclusive_end(params) do
+    starts_date = date_part(params["starts_at"])
+
+    case {date_part(params["ends_at"]), time_part(params["ends_at"])} do
+      {nil, _} ->
+        starts_date
+
+      {date, "00:00"} ->
+        with {:ok, d} <- Date.from_iso8601(date) do
+          candidate = Date.to_iso8601(Date.add(d, -1))
+          if is_binary(starts_date) and candidate < starts_date, do: date, else: candidate
+        else
+          _ -> date
+        end
+
+      {date, _} ->
+        date
+    end
   end
 
   defp carry_times_from_dates(params) do
@@ -938,6 +961,16 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
   end
 
   defp date_part(_), do: nil
+
+  defp time_part(value) when is_binary(value) do
+    case String.split(value, "T", parts: 2) do
+      # "23:00" / "23:00:00" — the first five chars decide midnight
+      [_, time] -> String.slice(time, 0, 5)
+      _ -> nil
+    end
+  end
+
+  defp time_part(_), do: nil
 
   defp with_time(date, time) when is_binary(date) and date != "", do: "#{date}T#{time}:00"
   defp with_time(_, _), do: nil

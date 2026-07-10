@@ -433,6 +433,47 @@ defmodule PhoenixKitCalendar.ParticipantsTest do
       assert length(all) == 10
     end
 
+    test "has_more survives dedup eating the overflow row", %{alice: alice} do
+      # 3 active users (no user-source overflow); 9 staff rows: 8 linked to
+      # INACTIVE users (kept by dedup) + 1 linked to an active user (eaten).
+      # Raw staff fetch = 9 > 8, post-dedup page = 8 — has_more must still
+      # be true or staff row #10 becomes unreachable (external review).
+      active = for _ <- 1..2, do: create_user()
+
+      inactive_uuids =
+        for i <- 1..8 do
+          u = create_user()
+          {:ok, bin} = Ecto.UUID.dump(u.uuid)
+
+          Repo.update_all(from(x in "phoenix_kit_users", where: x.uuid == ^bin),
+            set: [is_active: false]
+          )
+
+          u.uuid
+        end
+
+      for {uuid, i} <- Enum.with_index(inactive_uuids) do
+        seed("phoenix_kit_staff_people", %{user_uuid: dump_uuid(uuid), name: "Staffer #{i}"})
+      end
+
+      seed("phoenix_kit_staff_people", %{
+        user_uuid: dump_uuid(hd(active).uuid),
+        name: "A-first Duplicate"
+      })
+
+      with_sibling_modules(%{})
+
+      scope =
+        scope_for(alice, ["calendar", "calendar.invite_platform_users", "calendar.invite_staff"])
+
+      {results, has_more?} = Sources.search_participants(scope, "", 8)
+      staff = Keyword.get(results, :staff, [])
+
+      assert length(staff) == 8
+      refute Enum.any?(staff, &(&1.display_name == "A-first Duplicate"))
+      assert has_more?
+    end
+
     test "the same person is not listed once per source — the user kind wins",
          %{alice: alice, bob: bob} do
       # bob exists three ways: platform user + staff person + CRM contact

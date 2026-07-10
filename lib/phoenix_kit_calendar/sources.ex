@@ -77,17 +77,20 @@ defmodule PhoenixKitCalendar.Sources do
   def search_participants(scope, query, limit \\ @per_source_cap) do
     query = String.trim(query)
 
-    per_source =
+    per_source_raw =
       scope
       |> available_participant_sources()
       # one extra row per source so "has more" is knowable
       |> Enum.map(fn source -> {source, search_source(source, query, limit + 1)} end)
-      |> dedupe_linked_users()
 
-    has_more? = Enum.any?(per_source, fn {_source, results} -> length(results) > limit end)
+    # from RAW counts: dedup may eat the overflow row, but the source still
+    # holds more — a false "no more" would strand those rows unreachable
+    # (external review finding). Worst case is one extra Load more click.
+    has_more? = Enum.any?(per_source_raw, fn {_source, results} -> length(results) > limit end)
 
     results =
-      per_source
+      per_source_raw
+      |> dedupe_linked_users()
       |> Enum.map(fn {source, results} ->
         {source, results |> Enum.take(limit) |> Enum.map(&Map.delete(&1, :user_uuid))}
       end)
@@ -129,7 +132,7 @@ defmodule PhoenixKitCalendar.Sources do
         ilike(u.email, ^pattern) or
           ilike(fragment("COALESCE(?, '')", u.first_name), ^pattern) or
           ilike(fragment("COALESCE(?, '')", u.last_name), ^pattern),
-      order_by: [asc: u.email],
+      order_by: [asc: u.email, asc: u.uuid],
       limit: ^limit,
       select: %{
         uuid: type(u.uuid, UUIDv7),
@@ -152,7 +155,7 @@ defmodule PhoenixKitCalendar.Sources do
     from(sp in "phoenix_kit_staff_people",
       where: sp.status != "trashed",
       where: ilike(fragment("COALESCE(?, '')", sp.name), ^pattern),
-      order_by: [asc: sp.name],
+      order_by: [asc: sp.name, asc: sp.uuid],
       limit: ^limit,
       select: %{uuid: type(sp.uuid, UUIDv7), name: sp.name, user_uuid: type(sp.user_uuid, UUIDv7)}
     )
@@ -176,7 +179,7 @@ defmodule PhoenixKitCalendar.Sources do
     from(c in "phoenix_kit_crm_contacts",
       where: c.status != "trashed",
       where: ilike(fragment("COALESCE(?, '')", c.name), ^pattern),
-      order_by: [asc: c.name],
+      order_by: [asc: c.name, asc: c.uuid],
       limit: ^limit,
       select: %{uuid: type(c.uuid, UUIDv7), name: c.name, user_uuid: type(c.user_uuid, UUIDv7)}
     )
@@ -200,7 +203,7 @@ defmodule PhoenixKitCalendar.Sources do
     from(co in "phoenix_kit_crm_companies",
       where: co.status != "trashed",
       where: ilike(co.name, ^pattern),
-      order_by: [asc: co.name],
+      order_by: [asc: co.name, asc: co.uuid],
       limit: ^limit,
       select: %{uuid: type(co.uuid, UUIDv7), name: co.name}
     )
