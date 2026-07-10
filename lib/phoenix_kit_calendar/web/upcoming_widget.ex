@@ -37,13 +37,18 @@ defmodule PhoenixKitCalendar.Web.UpcomingWidget do
   # Own-calendar query through the authorized context path; any failure
   # (no scope, module disabled, missing table) collapses to an empty list.
   defp upcoming_events(scope, limit) do
+    tz = viewer_tz(scope)
+    # the viewer's LOCAL today, not UTC — otherwise all-day events flip a day
+    # early/late around UTC midnight for offset viewers
+    today = DateTime.utc_now() |> PhoenixKit.Utils.Date.shift_to_offset(tz) |> DateTime.to_date()
+
     with uuid when is_binary(uuid) <- scope && Scope.user_uuid(scope),
-         today = Date.utc_today(),
-         {:ok, events} <- Events.list_events(scope, uuid, today, Date.add(today, 60)) do
+         {:ok, events} <-
+           Events.list_events(scope, uuid, today, Date.add(today, 60), viewer_tz: tz) do
       now = DateTime.utc_now()
 
       events
-      |> Enum.reject(&past?(&1, now, today))
+      |> Enum.reject(&(&1.status == "cancelled" or past?(&1, now, today)))
       |> Enum.sort_by(&sort_key/1)
       |> Enum.take(limit)
     else

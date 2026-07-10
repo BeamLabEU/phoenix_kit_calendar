@@ -33,6 +33,7 @@ defmodule PhoenixKitCalendar.Events do
   alias PhoenixKit.RepoHelper
   alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKit.Users.Permissions
+  alias PhoenixKit.Utils.Date, as: DateUtils
   alias PhoenixKitCalendar.Schemas.Event
 
   @base_key "calendar"
@@ -96,12 +97,11 @@ defmodule PhoenixKitCalendar.Events do
 
   Returns `{:ok, events}` or `{:error, :unauthorized}`.
   """
-  @spec list_events(Scope.t() | nil, String.t(), Date.t(), Date.t()) ::
+  @spec list_events(Scope.t() | nil, String.t(), Date.t(), Date.t(), keyword()) ::
           {:ok, [Event.t()]} | {:error, :unauthorized}
-  def list_events(scope, owner_uuid, %Date{} = from, %Date{} = until) do
+  def list_events(scope, owner_uuid, %Date{} = from, %Date{} = until, opts \\ []) do
     with :ok <- authorize(scope, owner_uuid, :view) do
-      from_dt = DateTime.new!(from, ~T[00:00:00], "Etc/UTC")
-      until_dt = DateTime.new!(until, ~T[00:00:00], "Etc/UTC")
+      {from_dt, until_dt} = window_bounds(from, until, Keyword.get(opts, :viewer_tz, "0"))
 
       # a person's schedule = events they OWN plus events they PARTICIPATE
       # in (live resolution — see participant_visible_dynamic/1)
@@ -138,8 +138,7 @@ defmodule PhoenixKitCalendar.Events do
           {:ok, [Event.t()]} | {:error, :unauthorized}
   def list_all_events(scope, %Date{} = from, %Date{} = until, opts \\ []) do
     if Scope.can?(scope, @view_others) or Scope.can?(scope, @edit_others) do
-      from_dt = DateTime.new!(from, ~T[00:00:00], "Etc/UTC")
-      until_dt = DateTime.new!(until, ~T[00:00:00], "Etc/UTC")
+      {from_dt, until_dt} = window_bounds(from, until, Keyword.get(opts, :viewer_tz, "0"))
 
       events =
         from(e in Event,
@@ -174,26 +173,42 @@ defmodule PhoenixKitCalendar.Events do
   @spec get_event(Scope.t() | nil, String.t()) ::
           {:ok, Event.t()} | {:error, :not_found | :unauthorized}
   def get_event(scope, uuid) do
-    case repo().get(Event, uuid) do
+    # a forged/malformed event id (non-UUID string from a spoofed hook
+    # payload) makes repo().get raise Ecto.Query.CastError — treat it as
+    # a missing event, not a socket crash.
+    case safe_get(uuid) do
       nil ->
         {:error, :not_found}
 
       %Event{} = event ->
-        cond do
-          authorize(scope, event.owner_uuid, :view) == :ok ->
-            {:ok, resolve_live_locations(event)}
-
-          # being a participant grants visibility of THIS event only —
-          # never of the rest of the owner's calendar — and, like every
-          # other path, only while the calendar module is enabled
-          # (boss's call 2026-07-09: module off disables everything)
-          calendar_enabled?() and participant?(scope, event) ->
-            {:ok, resolve_live_locations(event)}
-
-          true ->
-            {:error, :unauthorized}
+        if readable?(scope, event) do
+          {:ok, resolve_live_locations(event)}
+        else
+          {:error, :unauthorized}
         end
     end
+  end
+
+  @doc """
+  Whether the scope may READ this event: owner-level view access, OR being a
+  live-resolved participant of THIS event (which grants visibility of this
+  event only, never the rest of the owner's calendar). Both require the
+  calendar module to be enabled — module off seals every path.
+
+  This is the single authorization predicate the participant read paths share
+  with `get_event/2`, so a participant sees the event AND its participant list
+  under the same rule.
+  """
+  @spec readable?(Scope.t() | nil, Event.t()) :: boolean()
+  def readable?(scope, %Event{} = event) do
+    authorize(scope, event.owner_uuid, :view) == :ok or
+      (calendar_enabled?() and participant?(scope, event))
+  end
+
+  defp safe_get(uuid) do
+    repo().get(Event, uuid)
+  rescue
+    _ -> nil
   end
 
   defp calendar_enabled?, do: Permissions.feature_enabled?("calendar")
@@ -228,16 +243,16 @@ defmodule PhoenixKitCalendar.Events do
   that powers the person panel's "empty (this view)" badge, which follows
   the visible range rather than all time.
   """
-  @spec count_events_by_owner(Scope.t() | nil, Date.t() | nil, Date.t() | nil) ::
+  @spec count_events_by_owner(Scope.t() | nil, Date.t() | nil, Date.t() | nil, keyword()) ::
           {:ok, %{String.t() => non_neg_integer()}} | {:error, :unauthorized}
-  def count_events_by_owner(scope, from \\ nil, until \\ nil) do
+  def count_events_by_owner(scope, from \\ nil, until \\ nil, opts \\ []) do
     if Scope.can?(scope, @view_others) or Scope.can?(scope, @edit_others) do
       counts =
         from(e in Event,
           group_by: e.owner_uuid,
           select: {e.owner_uuid, count(e.uuid)}
         )
-        |> maybe_window(from, until)
+        |> maybe_window(from, until, Keyword.get(opts, :viewer_tz, "0"))
         |> repo().all()
         |> Map.new()
 
@@ -247,9 +262,8 @@ defmodule PhoenixKitCalendar.Events do
     end
   end
 
-  defp maybe_window(query, %Date{} = from, %Date{} = until) do
-    from_dt = DateTime.new!(from, ~T[00:00:00], "Etc/UTC")
-    until_dt = DateTime.new!(until, ~T[00:00:00], "Etc/UTC")
+  defp maybe_window(query, %Date{} = from, %Date{} = until, viewer_tz) do
+    {from_dt, until_dt} = window_bounds(from, until, viewer_tz)
 
     from(e in query,
       where:
@@ -258,7 +272,22 @@ defmodule PhoenixKitCalendar.Events do
     )
   end
 
-  defp maybe_window(query, _from, _until), do: query
+  defp maybe_window(query, _from, _until, _viewer_tz), do: query
+
+  # The UTC instants bounding a VIEWER-LOCAL day window. Timed events are
+  # stored in UTC and displayed shifted by the viewer offset, so the viewer's
+  # [from, until) day range maps to the UTC half-open interval
+  # [from 00:00 - offset, until 00:00 - offset). Without this shift, timed
+  # events within `offset` hours of UTC midnight fall out of the very window
+  # the grid places them in (all-day events use bare dates and need no shift).
+  defp window_bounds(from, until, viewer_tz) do
+    offset = DateUtils.offset_to_seconds(viewer_tz)
+
+    {
+      DateTime.new!(from, ~T[00:00:00], "Etc/UTC") |> DateTime.add(-offset, :second),
+      DateTime.new!(until, ~T[00:00:00], "Etc/UTC") |> DateTime.add(-offset, :second)
+    }
+  end
 
   # ===========================================================================
   # Mutations
@@ -292,8 +321,13 @@ defmodule PhoenixKitCalendar.Events do
   @spec update_event(Scope.t() | nil, Event.t(), map(), keyword()) ::
           {:ok, Event.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
   def update_event(scope, %Event{} = event, attrs, opts \\ []) do
-    with :ok <- authorize(scope, event.owner_uuid, :edit) do
-      event
+    # Reload and authorize the PERSISTED owner, not the caller's in-memory
+    # struct: Ecto updates by primary key, so a struct carrying a forged
+    # owner_uuid would otherwise pass the check yet mutate the real row.
+    # This makes the moduledoc's "load-then-authorize" guarantee real for
+    # every caller, not just the LiveView that happens to pass a fresh row.
+    with {:ok, fresh} <- reload_and_authorize(scope, event, :edit) do
+      fresh
       |> Event.changeset(attrs)
       |> snapshot_location()
       |> repo().update()
@@ -307,10 +341,23 @@ defmodule PhoenixKitCalendar.Events do
   @spec delete_event(Scope.t() | nil, Event.t(), keyword()) ::
           {:ok, Event.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
   def delete_event(scope, %Event{} = event, opts \\ []) do
-    with :ok <- authorize(scope, event.owner_uuid, :edit) do
-      event
+    with {:ok, fresh} <- reload_and_authorize(scope, event, :edit) do
+      fresh
       |> repo().delete()
       |> tap_log("calendar_event.deleted", scope, opts)
+    end
+  end
+
+  # Reloads the event by uuid and authorizes the action against its CURRENT
+  # persisted owner. Returns `{:ok, fresh_event}`, `{:error, :not_found}` if
+  # it was deleted meanwhile, or `{:error, :unauthorized}`.
+  defp reload_and_authorize(scope, %Event{uuid: uuid}, action) do
+    case repo().get(Event, uuid) do
+      nil ->
+        {:error, :not_found}
+
+      %Event{} = fresh ->
+        with :ok <- authorize(scope, fresh.owner_uuid, action), do: {:ok, fresh}
     end
   end
 
@@ -436,9 +483,15 @@ defmodule PhoenixKitCalendar.Events do
   end
 
   # Activity logging — guarded so a logging failure (or core without the
-  # Activity module) never breaks the primary operation. Metadata carries the
-  # title and the owning calendar; note the activity feed's visibility is
-  # broader than calendar permissions, so nothing more sensitive goes in.
+  # Activity module) never breaks the primary operation.
+  #
+  # PRIVACY: the core activity feed (`/admin/activity`) is visible to any
+  # holder of the dashboard/activity permission — BROADER than calendar
+  # permissions — and renders all metadata. The event TITLE is private
+  # calendar content ("Private medical appointment"), so it must NOT go into
+  # this globally-readable record; only the resource uuid + owning calendar
+  # (both uuids) are logged. A richer, permission-scoped activity feed is the
+  # right long-term home for titles — tracked as a follow-up.
   defp tap_log({:ok, %Event{} = event} = result, action, scope, opts) do
     if Code.ensure_loaded?(PhoenixKit.Activity) do
       actor_uuid = Keyword.get(opts, :actor_uuid, scope && Scope.user_uuid(scope))
@@ -451,7 +504,6 @@ defmodule PhoenixKitCalendar.Events do
         resource_type: "calendar_event",
         resource_uuid: event.uuid,
         metadata: %{
-          "title" => event.title,
           "owner_uuid" => event.owner_uuid
         }
       })

@@ -262,7 +262,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     {:noreply, assign(socket, :people_query, query)}
   end
 
-  def handle_event("toggle_person", %{"uuid" => uuid}, socket) do
+  def handle_event("toggle_person", %{"uuid" => uuid}, socket) when is_binary(uuid) do
     selected = socket.assigns.selected
 
     selected =
@@ -273,8 +273,14 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     {:noreply, patch_selection(socket, selected)}
   end
 
-  def handle_event("solo_person", %{"uuid" => uuid}, socket) do
+  def handle_event("solo_person", %{"uuid" => uuid}, socket) when is_binary(uuid) do
     {:noreply, patch_selection(socket, MapSet.new([uuid]))}
+  end
+
+  # Ignore malformed layer-toggle payloads (a forged event could send a
+  # non-string uuid, which would later crash Enum.join/2 on the selection).
+  def handle_event(event, _params, socket) when event in ~w(toggle_person solo_person) do
+    {:noreply, socket}
   end
 
   def handle_event("select_me", _params, socket) do
@@ -399,7 +405,8 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     end
   end
 
-  def handle_event("validate_event", %{"event" => event_params} = params, socket) do
+  def handle_event("validate_event", %{"event" => event_params} = params, socket)
+      when is_map(event_params) do
     # phx-change keeps the form synced (the all-day toggle swaps the
     # date/datetime inputs; the owner picker drives the off-view warning),
     # but validation errors stay HIDDEN until the first save attempt —
@@ -429,32 +436,18 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
      |> assign(:event_form, to_form(changeset, as: "event"))}
   end
 
-  def handle_event("save_event", %{"event" => event_params} = params, socket) do
-    %{scope: scope, editing_event: editing} = socket.assigns
+  # Ignore a malformed (non-map) event payload rather than crash the socket.
+  def handle_event("validate_event", _params, socket), do: {:noreply, socket}
 
+  def handle_event("save_event", %{"event" => event_params} = params, socket)
+      when is_map(event_params) do
     event_params =
       event_params
       |> normalize_params()
       |> localize_times(socket.assigns.input_tz)
       |> link_location(socket.assigns.location_options)
 
-    result =
-      case editing do
-        %Event{} = event ->
-          Events.update_event(scope, event, event_params)
-
-        nil ->
-          # target = picker value (edit_others holders) or the modal default;
-          # sanitized to known people, authorized by the context either way
-          owner_uuid =
-            sanitize_owner(socket, params["owner"]) ||
-              socket.assigns.new_event_owner ||
-              socket.assigns.own_uuid
-
-          Events.create_event(scope, owner_uuid, event_params)
-      end
-
-    case result do
+    case persist_event(socket, event_params, params) do
       {:ok, event} ->
         {socket, participants_ok?} = save_participants(socket, event)
 
@@ -480,11 +473,40 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
          )
          |> close_modal()}
 
+      {:error, :not_found} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, Gettext.gettext(PhoenixKitWeb.Gettext, "Event not found"))
+         |> close_modal()
+         |> reload_events()}
+
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply,
          socket
          |> assign(:show_form_errors?, true)
          |> assign(:event_form, to_form(changeset, as: "event"))}
+    end
+  end
+
+  def handle_event("save_event", _params, socket), do: {:noreply, socket}
+
+  # Create on a fresh modal / update the editing event. The create target is
+  # the owner picker's value (edit_others holders) or the modal default,
+  # sanitized to known people and re-authorized by the context either way.
+  defp persist_event(socket, event_params, params) do
+    %{scope: scope, editing_event: editing} = socket.assigns
+
+    case editing do
+      %Event{} = event ->
+        Events.update_event(scope, event, event_params)
+
+      nil ->
+        owner_uuid =
+          sanitize_owner(socket, params["owner"]) ||
+            socket.assigns.new_event_owner ||
+            socket.assigns.own_uuid
+
+        Events.create_event(scope, owner_uuid, event_params)
     end
   end
 
@@ -546,13 +568,18 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     events =
       case MapSet.to_list(selected) do
         [owner_uuid] ->
-          case Events.list_events(scope, owner_uuid, from, until) do
+          case Events.list_events(scope, owner_uuid, from, until,
+                 viewer_tz: socket.assigns.viewer_tz
+               ) do
             {:ok, events} -> events
             {:error, _} -> []
           end
 
         owner_uuids ->
-          case Events.list_all_events(scope, from, until, owner_uuids: owner_uuids) do
+          case Events.list_all_events(scope, from, until,
+                 owner_uuids: owner_uuids,
+                 viewer_tz: socket.assigns.viewer_tz
+               ) do
             {:ok, events} -> events
             {:error, _} -> []
           end
@@ -567,7 +594,9 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
       {from, until} = socket.assigns.window
 
       counts =
-        case Events.count_events_by_owner(socket.assigns.scope, from, until) do
+        case Events.count_events_by_owner(socket.assigns.scope, from, until,
+               viewer_tz: socket.assigns.viewer_tz
+             ) do
           {:ok, counts} -> counts
           {:error, _} -> %{}
         end
@@ -700,8 +729,8 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
           []
 
         %Event{} = event ->
-          event.uuid
-          |> Participants.list_for_event()
+          socket.assigns.scope
+          |> Participants.list_for_event(event)
           |> Enum.map(
             &%{kind: &1.kind, target_uuid: &1.target_uuid, display_name: &1.display_name}
           )
@@ -731,8 +760,6 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
   # Only known people are acceptable targets, and only edit_others holders
   # may target anyone but themselves. The context re-authorizes on create —
   # this just keeps UI state (and the FK) clean.
-  defp sanitize_owner(_socket, nil), do: nil
-
   defp sanitize_owner(socket, uuid) when is_binary(uuid) do
     %{own_uuid: own_uuid, can_edit_others?: can_edit_others?, people: people} = socket.assigns
 
@@ -742,6 +769,10 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
       true -> own_uuid
     end
   end
+
+  # nil (no picker) or a forged non-string value → no explicit owner; the
+  # save path falls back to the modal default / own calendar.
+  defp sanitize_owner(_socket, _), do: nil
 
   defp close_modal(socket) do
     socket

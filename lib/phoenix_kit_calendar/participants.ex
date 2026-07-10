@@ -38,10 +38,24 @@ defmodule PhoenixKitCalendar.Participants do
   alias PhoenixKitCalendar.Sources
 
   @doc """
-  Lists an event's participants (insertion order).
+  Lists an event's participants (insertion order), authorized against the
+  event's persisted owner. Returns `[]` unless the scope may read the event
+  (owner-view or participant, module enabled) — so this public read honors
+  the same boundary as `Events.get_event/2` and can't be used to enumerate a
+  disabled module's participants.
   """
-  @spec list_for_event(String.t()) :: [Participant.t()]
-  def list_for_event(event_uuid) do
+  @spec list_for_event(Scope.t() | nil, Event.t()) :: [Participant.t()]
+  def list_for_event(scope, %Event{} = event) do
+    if Events.readable?(scope, event) do
+      raw_list_for_event(event.uuid)
+    else
+      []
+    end
+  end
+
+  # Unscoped raw read — internal only (replace_participants already
+  # authorized + locked the event). NEVER expose this.
+  defp raw_list_for_event(event_uuid) do
     from(p in Participant,
       where: p.event_uuid == ^event_uuid,
       order_by: [asc: p.inserted_at, asc: p.uuid]
@@ -65,26 +79,75 @@ defmodule PhoenixKitCalendar.Participants do
           | {:error, :unauthorized | :invalid_participant | Ecto.Changeset.t()}
   def replace_participants(scope, %Event{} = event, entries) do
     entries = normalize_entries(entries)
-    current = list_for_event(event.uuid)
+
+    # Everything runs inside ONE transaction that first LOCKS the event row.
+    # This (a) authorizes the event's PERSISTED owner — not the caller's
+    # in-memory struct, which could carry a forged owner_uuid — and (b)
+    # computes the current set + diff under the lock, so two concurrent
+    # replacements can't both read the same state and leave their union.
+    result =
+      repo().transaction(fn ->
+        fresh = lock_event(event.uuid)
+
+        cond do
+          is_nil(fresh) ->
+            repo().rollback(:not_found)
+
+          not Events.can_edit?(scope, fresh.owner_uuid) ->
+            repo().rollback(:unauthorized)
+
+          true ->
+            apply_replace(scope, fresh, entries)
+        end
+      end)
+
+    case result do
+      {:ok, {list, added}} ->
+        # notify AFTER commit — never hold the txn open on external work
+        notify_added(scope, event, added)
+        {:ok, list}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Diff + mutate under the event-row lock. Returns {participant_list,
+  # canonicalized_added} for post-commit notification.
+  defp apply_replace(scope, %Event{} = event, entries) do
+    current = raw_list_for_event(event.uuid)
     current_keys = MapSet.new(current, &entry_key/1)
     desired_keys = MapSet.new(entries, &entry_key/1)
 
     added = Enum.filter(entries, &(not MapSet.member?(current_keys, entry_key(&1))))
     removed = Enum.filter(current, &(not MapSet.member?(desired_keys, entry_key(&1))))
 
-    cond do
-      not Events.can_edit?(scope, event.owner_uuid) ->
-        {:error, :unauthorized}
-
-      not Enum.all?(added, &kind_allowed?(scope, &1.kind)) ->
-        {:error, :unauthorized}
-
-      true ->
-        case canonicalize_added(added) do
-          {:ok, added} -> apply_diff(scope, event, added, removed)
-          :error -> {:error, :invalid_participant}
-        end
+    unless Enum.all?(added, &kind_allowed?(scope, &1.kind)) do
+      repo().rollback(:unauthorized)
     end
+
+    added =
+      case canonicalize_added(added) do
+        {:ok, canonical} -> canonical
+        :error -> repo().rollback(:invalid_participant)
+      end
+
+    if removed != [] do
+      removed_uuids = Enum.map(removed, & &1.uuid)
+      from(p in Participant, where: p.uuid in ^removed_uuids) |> repo().delete_all()
+    end
+
+    added_by = scope && Scope.user_uuid(scope)
+    Enum.each(added, &insert_participant!(event, &1, added_by))
+
+    {raw_list_for_event(event.uuid), added}
+  end
+
+  # Locks the event row FOR UPDATE (serializes concurrent replacements) and
+  # returns the fresh struct, or nil if it was deleted meanwhile.
+  defp lock_event(event_uuid) do
+    from(e in Event, where: e.uuid == ^event_uuid, lock: "FOR UPDATE")
+    |> repo().one()
   end
 
   # Server-side identity resolution (quorum HIGH finding): the persisted
@@ -136,31 +199,6 @@ defmodule PhoenixKitCalendar.Participants do
 
   # ===========================================================================
 
-  defp apply_diff(scope, event, added, removed) do
-    repo().transaction(fn ->
-      if removed != [] do
-        removed_uuids = Enum.map(removed, & &1.uuid)
-
-        from(p in Participant, where: p.uuid in ^removed_uuids)
-        |> repo().delete_all()
-      end
-
-      added_by = scope && Scope.user_uuid(scope)
-
-      Enum.each(added, &insert_participant!(event, &1, added_by))
-
-      :ok
-    end)
-    |> case do
-      {:ok, :ok} ->
-        notify_added(scope, event, added)
-        {:ok, list_for_event(event.uuid)}
-
-      {:error, changeset} ->
-        {:error, changeset}
-    end
-  end
-
   # Inserts one participant row or rolls the surrounding transaction back.
   defp insert_participant!(event, entry, added_by) do
     %Participant{}
@@ -203,17 +241,21 @@ defmodule PhoenixKitCalendar.Participants do
         resource_type: "calendar_event",
         resource_uuid: event.uuid,
         target_uuid: target,
+        # No event TITLE here — the activity feed is readable beyond calendar
+        # permissions (see Events.tap_log/4). The participant sees the full
+        # event (title and all) on their OWN calendar via live visibility, so
+        # a title-free notification leaks nothing yet still points them there.
         metadata: %{
-          "title" => event.title,
-          "notification_text" => notification_text(event)
+          "notification_text" => notification_text()
         }
       })
     end
   end
 
-  defp notification_text(event) do
-    Gettext.gettext(PhoenixKitWeb.Gettext, "You were added to the event \"%{title}\"",
-      title: event.title
+  defp notification_text do
+    Gettext.gettext(
+      PhoenixKitWeb.Gettext,
+      "You were added to an event — it's now on your calendar"
     )
   end
 

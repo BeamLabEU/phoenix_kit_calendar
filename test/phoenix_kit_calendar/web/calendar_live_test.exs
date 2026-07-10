@@ -664,6 +664,26 @@ defmodule PhoenixKitCalendar.Web.CalendarLiveTest do
       do: %{key: "locations", label: "Locations", icon: "hero-map-pin", description: ""}
   end
 
+  describe "malformed payloads don't crash the socket" do
+    test "forged toggle_person / save_event / event-click payloads are ignored",
+         %{conn: conn, me: me} do
+      conn = login(conn, me, ["calendar", "calendar.view_others"])
+      {:ok, view, _} = live(conn, @path)
+
+      # non-string uuid would later crash Enum.join on the selection
+      render_hook(view, "toggle_person", %{"uuid" => %{"evil" => true}})
+      render_hook(view, "solo_person", %{"uuid" => 123})
+      # non-map event payload
+      render_hook(view, "save_event", %{"event" => "not-a-map"})
+      render_hook(view, "validate_event", %{"event" => ["x"]})
+      # forged, non-UUID event id → get_event must not raise
+      send(view.pid, {:calendar_event_click, "not-a-uuid"})
+
+      # socket is still alive and rendering
+      assert render(view) =~ "My calendar"
+    end
+  end
+
   # The pickers are core SearchPicker hooks — the dropdown is client-side;
   # these cover the server half of the contract (search → push_event rows,
   # pick/text → chip + staged confirmation).

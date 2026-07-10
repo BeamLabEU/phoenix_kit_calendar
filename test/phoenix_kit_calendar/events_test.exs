@@ -144,6 +144,32 @@ defmodule PhoenixKitCalendar.EventsTest do
 
       assert updated.owner_uuid == bob.uuid
     end
+
+    test "authorization uses the PERSISTED owner, not a forged in-memory struct",
+         %{alice: alice, bob: bob, event: event} do
+      # Alice holds only her own calendar. A struct claiming SHE owns Bob's
+      # event must not let her mutate the real row (which Ecto keys by uuid).
+      forged = %{event | owner_uuid: alice.uuid}
+      alice_scope = scope_for(alice, ["calendar"])
+
+      assert {:error, :unauthorized} =
+               Events.update_event(alice_scope, forged, %{"title" => "Pwned"})
+
+      assert {:error, :unauthorized} = Events.delete_event(alice_scope, forged)
+
+      # Bob's row is untouched
+      {:ok, reloaded} = Events.get_event(scope_for(bob, ["calendar"]), event.uuid)
+      assert reloaded.title == event.title
+      assert reloaded.owner_uuid == bob.uuid
+    end
+
+    test "updating a since-deleted event returns :not_found, not a crash",
+         %{bob: bob, event: event} do
+      scope = scope_for(bob, ["calendar"])
+      {:ok, _} = Events.delete_event(scope, event)
+
+      assert {:error, :not_found} = Events.update_event(scope, event, %{"title" => "Zombie"})
+    end
   end
 
   describe "list_events/4" do
@@ -164,6 +190,30 @@ defmodule PhoenixKitCalendar.EventsTest do
 
       {:ok, events} = Events.list_events(scope, alice.uuid, ~D[2026-07-01], ~D[2026-08-01])
       assert Enum.map(events, & &1.uuid) == [inside.uuid]
+    end
+
+    test "a timed event near UTC midnight lands in the viewer-local window",
+         %{alice: alice} do
+      scope = scope_for(alice, ["calendar"])
+
+      # stored 2026-06-30 22:00 UTC — which is 2026-07-01 01:00 for a UTC+3
+      # viewer, so it belongs on July 1 in their grid
+      {:ok, event} =
+        Events.create_event(scope, alice.uuid, %{
+          "title" => "Late night",
+          "starts_at" => "2026-06-30T22:00:00Z",
+          "ends_at" => "2026-06-30T23:00:00Z"
+        })
+
+      # UTC-framed query for July excludes it (it's June 30 in UTC)
+      {:ok, utc} = Events.list_events(scope, alice.uuid, ~D[2026-07-01], ~D[2026-08-01])
+      refute event.uuid in Enum.map(utc, & &1.uuid)
+
+      # the viewer-local (UTC+3) window includes it, matching the grid
+      {:ok, local} =
+        Events.list_events(scope, alice.uuid, ~D[2026-07-01], ~D[2026-08-01], viewer_tz: "3")
+
+      assert event.uuid in Enum.map(local, & &1.uuid)
     end
 
     test "all-day events overlap the window by dates", %{alice: alice} do

@@ -322,7 +322,20 @@ defmodule PhoenixKitCalendar.ParticipantsTest do
                  %{kind: "user", target_uuid: Ecto.UUID.generate(), display_name: "Ghost"}
                ])
 
-      assert Participants.list_for_event(event.uuid) == []
+      assert Participants.list_for_event(editor(alice), event) == []
+    end
+
+    test "list_for_event returns [] for a scope that cannot read the event",
+         %{alice: alice, bob: bob, event: event} do
+      {:ok, _} = Participants.replace_participants(editor(alice), event, [user_entry(bob)])
+
+      # the owner (alice) sees the participants
+      assert [_] = Participants.list_for_event(scope_for(alice, ["calendar"]), event)
+
+      # an unrelated user with no cross-calendar access sees nothing, even
+      # though the raw rows exist (no enumeration of others' participants)
+      stranger = create_user()
+      assert Participants.list_for_event(scope_for(stranger, ["calendar"]), event) == []
     end
   end
 
@@ -441,7 +454,7 @@ defmodule PhoenixKitCalendar.ParticipantsTest do
       active = for _ <- 1..2, do: create_user()
 
       inactive_uuids =
-        for i <- 1..8 do
+        for _i <- 1..8 do
           u = create_user()
           {:ok, bin} = Ecto.UUID.dump(u.uuid)
 
