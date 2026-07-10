@@ -28,7 +28,7 @@ defmodule PhoenixKitCalendar.Schemas.Event do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @statuses ~w(confirmed cancelled)
+  @statuses ~w(active cancelled)
 
   # daisyUI backgrounds phoenix_live_calendar can infer a readable text
   # color for (Safe.infer_text_color/1), plus four static Tailwind hues
@@ -55,7 +55,7 @@ defmodule PhoenixKitCalendar.Schemas.Event do
     field(:starts_on, :date)
     field(:ends_on, :date)
     field(:color, :string)
-    field(:status, :string, default: "confirmed")
+    field(:status, :string, default: "active")
 
     timestamps(type: :utc_datetime)
   end

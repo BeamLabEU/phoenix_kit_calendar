@@ -668,6 +668,9 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     }
   end
 
+  # DB "active"/"cancelled" → phoenix_live_calendar's status atoms. The lib's
+  # "normal" atom is :confirmed (its own vocabulary); our "active" and any
+  # legacy value map to it for solid rendering, "cancelled" strikes through.
   defp status_atom("cancelled"), do: :cancelled
   defp status_atom(_), do: :confirmed
 
@@ -1961,7 +1964,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
   # reads as "Active" — the meaningful distinction is active vs cancelled.
   defp status_options do
     [
-      {Gettext.gettext(PhoenixKitWeb.Gettext, "Active"), "confirmed"},
+      {Gettext.gettext(PhoenixKitWeb.Gettext, "Active"), "active"},
       {Gettext.gettext(PhoenixKitWeb.Gettext, "Cancelled"), "cancelled"}
     ]
   end
