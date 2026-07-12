@@ -84,8 +84,9 @@ defmodule PhoenixKitCalendar.MixProject do
       # the V141 calendar-events migration. Sub-permissions (Scope.can?/2)
       # and the events table ship in the release after 1.7.179 — until then
       # the standalone suite is red against the published pin; develop with
-      # PHOENIX_KIT_PATH=../phoenix_kit.
-      pk_dep(:phoenix_kit, "~> 1.7.179"),
+      # PHOENIX_KIT_PATH=../phoenix_kit. `disabled`/`wrapper_class`/`title`/
+      # `:description` on the shared `<.checkbox>` component ship in 1.7.184.
+      pk_dep(:phoenix_kit, "~> 1.7.184"),
 
       # The server-rendered calendar component (month view etc.).
       pk_dep(:phoenix_live_calendar, "~> 0.2"),

@@ -1484,16 +1484,13 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
                       )
                   )}
                 </span>
-                <label class="flex items-center gap-2 cursor-pointer whitespace-nowrap">
-                  <input
-                    type="checkbox"
-                    name="owner_tz_entry"
-                    value="true"
-                    checked={@enter_in_owner_tz?}
-                    class="checkbox checkbox-xs"
-                  />
-                  {gettext("Use their timezone")}
-                </label>
+                <.checkbox
+                  name="owner_tz_entry"
+                  checked={@enter_in_owner_tz?}
+                  label={gettext("Use their timezone")}
+                  class="checkbox-xs"
+                  wrapper_class="whitespace-nowrap"
+                />
               </div>
             <% end %>
 
