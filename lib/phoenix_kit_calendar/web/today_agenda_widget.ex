@@ -60,7 +60,7 @@ defmodule PhoenixKitCalendar.Web.TodayAgendaWidget do
             />
           </div>
         <% else %>
-          <ul class={["overflow-y-auto", (@compact && "space-y-0.5") || "space-y-1.5"]}>
+          <ul class={["overflow-hidden", (@compact && "space-y-0.5") || "space-y-1.5"]}>
             <li :for={event <- @events} class="flex items-start gap-2 min-w-0">
               <span class={["mt-1.5 w-2 h-2 rounded-full shrink-0", event.color || "bg-primary"]} />
               <div class="min-w-0">
