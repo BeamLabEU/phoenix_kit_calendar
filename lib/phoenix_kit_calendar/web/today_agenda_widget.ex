@@ -30,7 +30,6 @@ defmodule PhoenixKitCalendar.Web.TodayAgendaWidget do
      |> assign(:today, today)
      |> assign(:viewer_tz, tz)
      |> assign(:show_location, Map.get(settings, "show_location", true) in [true, "true"])
-     |> assign(:compact, WidgetSupport.compact?(assigns[:size]))
      |> assign(:events, todays_events(scope, today, tz))}
   end
 
@@ -45,7 +44,7 @@ defmodule PhoenixKitCalendar.Web.TodayAgendaWidget do
   def render(assigns) do
     ~H"""
     <div class="card h-full overflow-hidden bg-base-100 flex flex-col">
-      <div class={["card-body", (@compact && "p-2 gap-1") || "p-4 gap-2"]}>
+      <div class="card-body flex h-full min-h-0 flex-col gap-2 p-3">
         <div class="flex items-baseline justify-between shrink-0">
           <span class="text-sm font-semibold">{Calendar.strftime(@today, "%A")}</span>
           <span class="text-xs text-base-content/60">{Calendar.strftime(@today, "%b %-d")}</span>
@@ -60,17 +59,24 @@ defmodule PhoenixKitCalendar.Web.TodayAgendaWidget do
             />
           </div>
         <% else %>
-          <ul class={["overflow-hidden", (@compact && "space-y-0.5") || "space-y-1.5"]}>
-            <li :for={event <- @events} class="flex items-start gap-2 min-w-0">
-              <span class={["mt-1.5 w-2 h-2 rounded-full shrink-0", event.color || "bg-primary"]} />
-              <div class="min-w-0">
-                <p class="text-sm font-medium truncate">{event.title}</p>
-                <p class="text-xs text-base-content/60 truncate">
+          <%!-- N-SLOT self-fit (dashboards contract): the body divides into
+          slots (min 4, so one event doesn't poster up) and each row's type
+          scales to its slot via cq units — the agenda always fits its box. --%>
+          <ul class="flex min-h-0 flex-1 flex-col">
+            <li
+              :for={event <- @events}
+              class="flex min-h-0 flex-1 items-center gap-2 min-w-0 overflow-hidden [container-type:size]"
+            >
+              <span class={["h-[10cqh] w-[10cqh] rounded-full shrink-0", event.color || "bg-primary"]} />
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-[34cqh] font-medium leading-tight">{event.title}</p>
+                <p class="truncate text-[24cqh] leading-tight text-base-content/60">
                   {time_label(event, @viewer_tz)}<span :if={@show_location && event.location}>
                     · {event.location}</span>
                 </p>
               </div>
             </li>
+            <li :for={_pad <- 1..max(4 - length(@events), 0)//1} class="min-h-0 flex-1"></li>
           </ul>
         <% end %>
       </div>

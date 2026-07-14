@@ -32,8 +32,8 @@ defmodule PhoenixKitCalendar.Web.UpcomingWidget do
      socket
      |> assign(:id, assigns.id)
      |> assign(:show_location, Map.get(settings, "show_location", true) in [true, "true"])
-     |> assign(:compact, WidgetSupport.compact?(assigns[:size]))
      |> assign(:viewer_tz, WidgetSupport.viewer_tz(scope))
+     |> assign(:limit, limit)
      |> assign(:events, upcoming_events(scope, limit))}
   end
 
@@ -75,7 +75,7 @@ defmodule PhoenixKitCalendar.Web.UpcomingWidget do
   def render(assigns) do
     ~H"""
     <div class="card h-full overflow-hidden bg-base-100 flex flex-col">
-      <div class={["card-body", (@compact && "p-2 gap-1") || "p-4 gap-2"]}>
+      <div class="card-body flex h-full min-h-0 flex-col gap-2 p-3">
         <%= if @events == [] do %>
           <div class="flex items-center justify-center h-full">
             <EmptyState.empty_state
@@ -85,17 +85,22 @@ defmodule PhoenixKitCalendar.Web.UpcomingWidget do
             />
           </div>
         <% else %>
-          <ul class={["overflow-hidden", (@compact && "space-y-0.5") || "space-y-1.5"]}>
-            <li :for={event <- @events} class="flex items-start gap-2 min-w-0">
-              <span class={["mt-1.5 w-2 h-2 rounded-full shrink-0", event.color || "bg-primary"]} />
-              <div class="min-w-0">
-                <p class="text-sm font-medium truncate">{event.title}</p>
-                <p class="text-xs text-base-content/60 truncate">
+          <%!-- N-SLOT self-fit: the `limit` budget of slots; cq row type. --%>
+          <ul class="flex min-h-0 flex-1 flex-col">
+            <li
+              :for={event <- @events}
+              class="flex min-h-0 flex-1 items-center gap-2 min-w-0 overflow-hidden [container-type:size]"
+            >
+              <span class={["h-[10cqh] w-[10cqh] rounded-full shrink-0", event.color || "bg-primary"]} />
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-[34cqh] font-medium leading-tight">{event.title}</p>
+                <p class="truncate text-[24cqh] leading-tight text-base-content/60">
                   {when_label(event, @viewer_tz)}<span :if={@show_location && event.location}>
                     · {event.location}</span>
                 </p>
               </div>
             </li>
+            <li :for={_pad <- 1..max(@limit - length(@events), 0)//1} class="min-h-0 flex-1"></li>
           </ul>
         <% end %>
       </div>
