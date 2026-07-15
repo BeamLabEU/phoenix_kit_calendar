@@ -62,6 +62,13 @@ defmodule PhoenixKitCalendar.Web.TodayAgendaWidget do
           <%!-- N-SLOT self-fit (dashboards contract): the body divides into
           slots (min 4, so one event doesn't poster up) and each row's type
           scales to its slot via cq units — the agenda always fits its box. --%>
+          <style>
+            @container (max-height: 26px) {
+              .pk-slot-meta {
+                display: none !important;
+              }
+            }
+          </style>
           <ul class="flex min-h-0 flex-1 flex-col">
             <li
               :for={event <- @events}
@@ -69,8 +76,16 @@ defmodule PhoenixKitCalendar.Web.TodayAgendaWidget do
             >
               <span class={["h-[10cqh] w-[10cqh] rounded-full shrink-0", event.color || "bg-primary"]} />
               <div class="min-w-0 flex-1">
-                <p class="truncate text-[34cqh] font-medium leading-tight">{event.title}</p>
-                <p class="truncate text-[24cqh] leading-tight text-base-content/60">
+                <p
+                  class="truncate font-medium leading-tight"
+                  style={WidgetSupport.fit_text(11, "34cqh", 15)}
+                >
+                  {event.title}
+                </p>
+                <p
+                  class="pk-slot-meta truncate leading-tight text-base-content/60"
+                  style={WidgetSupport.fit_text(9, "24cqh", 12)}
+                >
                   {time_label(event, @viewer_tz)}<span :if={@show_location && event.location}>
                     · {event.location}</span>
                 </p>

@@ -113,6 +113,17 @@ defmodule PhoenixKitCalendar.Web.WidgetSupport do
 
   def sort_key(%Event{} = event), do: event.starts_at
 
+  @doc """
+  A scale-aware self-fit font-size style: the type grows with its cq slot but
+  stays clamped to a consistent px range, so widgets look cohesive at any box
+  size. The `--pk-scale` var (set by the dashboards fit hook) keeps the clamp
+  proportional when the board renders scaled down.
+  """
+  @spec fit_text(number(), String.t(), number()) :: String.t()
+  def fit_text(min_px, cq, max_px) do
+    "font-size: clamp(calc(#{min_px}px * var(--pk-scale, 1)), #{cq}, calc(#{max_px}px * var(--pk-scale, 1)))"
+  end
+
   # Inclusive date range as a list; empty when the range is inverted.
   defp date_list(%Date{} = from, %Date{} = to) do
     if Date.compare(from, to) == :gt, do: [], else: Enum.to_list(Date.range(from, to))
