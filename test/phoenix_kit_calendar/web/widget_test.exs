@@ -128,6 +128,23 @@ defmodule PhoenixKitCalendar.Web.WidgetTest do
     end
   end
 
+  describe "mini_month sizing (regression: a 6-row month must not be silently clipped)" do
+    test "stays scrollable at its declared min_size instead of hard-clipping", %{alice: alice} do
+      html =
+        render_component(MiniMonthWidget,
+          id: "m",
+          scope: scope_for(alice),
+          settings: %{},
+          size: %{w: 8, h: 8}
+        )
+
+      # A 6-row month's content can exceed the min_size box; overflow-auto
+      # keeps it reachable via scroll instead of overflow-hidden eating rows
+      # with no way to recover them.
+      assert html =~ ~r/card-body[^"]*overflow-auto/
+    end
+  end
+
   describe "views (user-chosen, honored verbatim)" do
     test "Upcoming compact renders one-line rows without the meta line", %{alice: alice} do
       event_for(alice, "Standup", 1)
@@ -163,6 +180,47 @@ defmodule PhoenixKitCalendar.Web.WidgetTest do
       html =
         render_component(UpcomingWidget,
           id: "u",
+          scope: scope_for(alice),
+          settings: %{},
+          view: "bogus",
+          size: %{w: 12, h: 8}
+        )
+
+      assert html =~ "pk-slot-meta truncate"
+    end
+
+    test "Today compact renders one-line rows without the meta line", %{alice: alice} do
+      event_for(alice, "Standup", 0)
+
+      detailed =
+        render_component(TodayAgendaWidget,
+          id: "t",
+          scope: scope_for(alice),
+          settings: %{},
+          view: "detailed",
+          size: %{w: 12, h: 8}
+        )
+
+      compact =
+        render_component(TodayAgendaWidget,
+          id: "t",
+          scope: scope_for(alice),
+          settings: %{},
+          view: "compact",
+          size: %{w: 12, h: 4}
+        )
+
+      assert detailed =~ "Standup" and detailed =~ "pk-slot-meta truncate"
+      assert compact =~ "Standup"
+      refute compact =~ "pk-slot-meta truncate"
+    end
+
+    test "Today: an unknown view falls back to detailed", %{alice: alice} do
+      event_for(alice, "Standup", 0)
+
+      html =
+        render_component(TodayAgendaWidget,
+          id: "t",
           scope: scope_for(alice),
           settings: %{},
           view: "bogus",

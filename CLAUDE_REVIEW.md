@@ -1,178 +1,161 @@
-# Review: PR #2 — Calendar module (personal calendars, fine-grained permissions, quality sweep)
+# Review: PR #4 — Update the calendar dashboard widgets for the screenful lattice
 
-Reviewed against the invariants documented in `AGENTS.md`. Scope: the full initial
-module (`lib/phoenix_kit_calendar/**`, `test/**`) merged in PR #2, current as of
-`a51468e` (merge) / `ce7bb44` (mix.lock bump, no source changes since).
+Reviewed against `AGENTS.md`'s "Dashboard widgets" section and the duck-typed
+`phoenix_kit_widgets/0` contract with the sibling `phoenix_kit_dashboards` package.
+Scope: `lib/phoenix_kit_calendar.ex` (widget declarations), the three widget
+LiveComponents, `Web.WidgetSupport`, and `test/phoenix_kit_calendar/web/widget_test.exs`,
+as merged at `56c744c` (merge of PR #4, branch `mdon/main`), current tree at `497e251`.
 
-Methodology: five focused passes — Events context authorization, Participants/Sources
-leak control, `CalendarLive` LiveView, dashboard widgets + main module, and test
-coverage against the documented invariants — each independently verifying AGENTS.md's
-claims against the actual code (not trusting the doc), with a follow-up direct
-`Enum.sort_by/2` term-order check in an IEx session to confirm the most significant
-finding before fixing it.
+Methodology: read every changed file with full surrounding context (not just diff
+hunks); cross-checked the calendar's new widget-declaration fields (`views`,
+lattice-scale `default_size`/`min_size`, dropped `max_size`) and the widgets' new
+`--pk-scale` / container-query CSS against the ACTUAL current source of the sibling
+`/workspace/phoenix_kit_dashboards` package (not assumed) to verify the duck-typed
+contract is genuinely honored on both sides; did an arithmetic pixel-budget check of
+the mini-month widget's rendered content against its declared minimum box size.
 
 ## Findings
 
-### BUG-HIGH — dashboard widgets sort chronologically-wrong across month boundaries
+### BUG-HIGH — mini-month widget silently clips a 6-row month at its own declared minimum size
 
-`lib/phoenix_kit_calendar/web/upcoming_widget.ex` and
-`lib/phoenix_kit_calendar/web/today_agenda_widget.ex` both called:
+`lib/phoenix_kit_calendar/web/mini_month_widget.ex`'s card-body wrapper changed from
+`overflow-auto` to `overflow-hidden`:
 
 ```elixir
-Enum.sort_by(&WidgetSupport.sort_key/1)
+<div class="card-body p-3 flex items-center justify-center overflow-hidden">
 ```
 
-`sort_key/1` returns a `DateTime.t()`. Without an explicit comparator,
-`Enum.sort_by/2` uses raw Erlang term ordering, and `%DateTime{}`'s fields compare
-alphabetically by key — `day` before `month` before `year`. Verified directly:
+`calendar.mini_month`'s declared `min_size` is `%{w: 8, h: 8}` (`lib/phoenix_kit_calendar.ex`)
+— 8 lattice cells × the dashboards package's documented 25px nominal cell
+(`phoenix_kit_dashboards/lib/phoenix_kit_dashboards/lattice.ex`) = a 200×200px nominal
+box. After subtracting the dashboards frame chrome around a placed widget (outer
+`m-[2px]` + `border` + the drag-handle/action-button bar in
+`phoenix_kit_dashboards/lib/phoenix_kit_dashboards/web/builder_components.ex`) and this
+widget's own `card-body p-3` padding, the actual available content height at min size
+is **≈138px**.
 
-```
-Enum.sort_by([~U[2026-08-05 09:00:00Z], ~U[2026-07-20 09:00:00Z]], & &1)
-#=> [~U[2026-08-05 09:00:00Z], ~U[2026-07-20 09:00:00Z]]   # August before July — wrong
-```
+`PhoenixLiveCalendar.Components.MiniCalendar`'s rendered content for a 6-row month
+(header ~24px + day-name row ~20px + 6 week-rows × ~33px when a week has an event dot)
+is **≈242px** — roughly **104px / ~3 week-rows too tall** for the available box. Because
+the wrapper also has `items-center justify-center`, the overflow clips symmetrically
+(top and bottom), so both the tail of the month and part of the header can vanish.
 
-- **Upcoming** (60-day horizon): "soonest first" breaks on most renders once the
-  window crosses a month boundary — which it does on the majority of days in a month.
-- **Today**: degenerates harmlessly within a single day, except for a multi-day
-  all-day event that started in an earlier month and is still active today — it can
-  sort after same-day timed events, violating "all-day first."
-- The existing pinning tests (`widget_test.exs`) only used events 0–4 days apart,
-  always within one month, so this never fired.
+With the *previous* `overflow-auto`, a user could still scroll to see the clipped
+weeks; `overflow-hidden` makes them simply gone, with no recovery, at exactly the box
+size the widget itself advertises as its supported minimum. Several months a year need
+6 grid rows, so this isn't an edge case.
 
-**Fix applied:** `Enum.sort_by(&WidgetSupport.sort_key/1, DateTime)` in both files —
-passing the `DateTime` module uses `DateTime.compare/2`. Locked in with a new test,
-`test/phoenix_kit_calendar/web/widget_test.exs` — "Upcoming stays soonest-first even
-when day-of-month decreases" — which computes a real month-boundary date pair,
-inserts the events out of chronological order, and asserts render order.
+**Fix applied:** reverted the card-body wrapper to `overflow-auto`
+(`mini_month_widget.ex`), restoring scroll-to-recover behavior. Locked in with a new
+test, `test/phoenix_kit_calendar/web/widget_test.exs` — "mini_month sizing... stays
+scrollable at its declared min_size instead of hard-clipping" — asserting the
+`card-body` renders with `overflow-auto`.
 
-### IMPROVEMENT-HIGH — `CalendarLive.mount/3` queried the DB and the result never refreshed
+**Not fixed, flagged for follow-up:** this only restores the old safety net: it
+doesn't make the mini-month fit its box at min size. Unlike the `Upcoming`/`Today`
+widgets (which this same PR gave a genuine self-fit treatment via `container-type:size`
++ `cqh` clamped type + `--pk-scale`), `MiniMonthWidget` has no such treatment — it
+can't, since `MiniCalendar`'s cell/dot sizes are fixed Tailwind classes owned by the
+external `phoenix_live_calendar` dependency, not something this module controls
+without wrapping it in its own scaling logic (e.g. a CSS `transform: scale()` container
+driven by cq, or a taller `min_size`). Either fix is a real design decision beyond a
+one-line correction, so it's left as a follow-up rather than attempted here.
 
-`lib/phoenix_kit_calendar/web/calendar_live.ex` `mount/3` called `load_people/1`
-(3 DB round trips: user list + two permission/role queries) unconditionally — not
-gated by `connected?(socket)` like the PubSub subscribe two lines above it, so it ran
-on both the disconnected static-render mount and the connected websocket mount
-(duplicate query on every page load), and — because `mount/3` only runs once —
-`:people` was never reassigned anywhere else in the file. A user created, or whose
-calendar access changed, after the socket connected would never appear in the
-"Calendars" panel, the owner picker, or `sanitize_owner/2`'s known-people check for
-the entire life of that socket. This is exactly the "no DB queries in `mount/3`"
-Iron Law the codebase otherwise follows carefully (events/window-count reloads
-already live in `handle_params`/`handle_info`, re-run against the fresh scope on
-every navigation).
+### Contract verification (no issues found) — duck-typed `phoenix_kit_widgets/0` vs. `phoenix_kit_dashboards`
 
-Not a security hole — every mutation path independently re-authorizes against the
-persisted owner via the context regardless of what `:people` shows — but a real
-functional staleness + duplicate-query bug.
+Checked every new/changed contract point in this PR against the ACTUAL current
+`phoenix_kit_dashboards` source (sibling checkout at `/workspace/phoenix_kit_dashboards`),
+since this is a one-way duck-typed contract with no compile-time check:
 
-**Fix applied:** moved the `load_people/1` call out of `mount/3` (now assigns `[]`)
-and into `handle_params/3`, before `sanitize_selection/2` (which depends on it),
-matching the file's own "reload against fresh state on every navigation" convention
-used everywhere else. Locked in with a new test,
-`test/phoenix_kit_calendar/web/calendar_live_test.exs` — "a person created after
-connecting appears once the panel reloads (not a mount-time copy)".
+- **`views` key** — genuinely read by `PhoenixKitDashboards.Widget.from_map/2` /
+  `normalize_views/2`; shape (`%{key:, name:, min_size: %{w:, h:}}`) matches exactly;
+  per-view `min_size` is honored by `Widget.min_size_for/2` for resize-hook clamping.
+- **Dropped `max_size`** — confirmed a pure no-op both before and after this PR:
+  `phoenix_kit_dashboards` hardcodes the struct's `max_size` to the lattice's global
+  max regardless of what a provider supplies (explicit comment in `widget.ex`: a
+  provider max "serves nobody" on the screenful lattice). The calendar's old
+  `max_size: %{w: 6, h: 4}` was already being silently discarded.
+- **Lattice-scale `default_size`/`min_size`** — genuinely interpreted as 25px-nominal
+  cells by `phoenix_kit_dashboards`; the PR's new `w:12,h:8`-scale values are the
+  correct order of magnitude (matching the dashboards package's own built-in widget
+  defaults), whereas the *old* small-scale values (`w:3,h:2`) would have been clamped
+  up to the lattice's floor and rendered far smaller than intended.
+- **`--pk-scale`** — a real CSS custom property, actively set by the dashboards
+  package's grid/free-fit hooks on the canvas ancestor (not aspirational), and already
+  consumed the identical way by the dashboards package's own built-in
+  `ModuleStatsWidget`. The calendar widgets' `clamp(... var(--pk-scale, 1) ...)` usage
+  matches this established, working pattern.
+- **`:view` assign** — `phoenix_kit_dashboards` passes exactly this assign name/shape
+  to every placed widget's `live_component`, sourced from the per-instance persisted
+  view selection; matches what `UpcomingWidget`/`TodayAgendaWidget` read via
+  `assigns[:view]`.
 
-### IMPROVEMENT-MEDIUM — activity-log failure could silently drop the PubSub broadcast
+One nuance, not a defect: the dashboards package's own built-in widgets use `cq` length
+units but not `@container (...)` at-rule blocks; this PR's use of an actual
+`@container (max-height: 26px) { ... }` block in the agenda widgets is a step beyond
+existing precedent in that codebase. It's architecturally sound (each row already has
+its own `[container-type:size]`), but worth a quick manual/browser sanity check since
+nothing else in the ecosystem exercises that exact path yet.
 
-`lib/phoenix_kit_calendar/events.ex` `tap_log/4` ran `PhoenixKit.Activity.log/1` and
-`broadcast_event_changed/1` inside the same `rescue`. The comment states logging
-failure "never breaks the primary operation," but as written, an exception from
-`Activity.log/1` would also skip the broadcast that runs after it in source order —
-silently dropping the live cross-tab update for that mutation, not just the audit
-record.
+### IMPROVEMENT-MEDIUM — `TodayAgendaWidget`'s view logic had zero test coverage
 
-**Fix applied:** split activity logging into its own `log_activity/4` with its own
-`rescue`, so `broadcast_event_changed/1` always runs after a successful mutation
-regardless of logging outcome. No behavior change on the happy path; not separately
-tested (would require forcing `PhoenixKit.Activity.log/1` to raise, which the test
-suite has no seam for and isn't worth adding one for this fix's size).
+`UpcomingWidget` and `TodayAgendaWidget` both got the identical new `view`
+(`detailed`/`compact`, defaulting to `detailed` on anything else) rendering logic, but
+the PR's new "views" test `describe` block only exercised `UpcomingWidget`. A future
+refactor could silently break `TodayAgendaWidget`'s compact rendering or its
+unknown-view fallback with nothing to catch it.
 
-### Verified clean (no action needed)
+**Fix applied:** added the same two tests for `TodayAgendaWidget` ("compact renders
+one-line rows without the meta line" / "an unknown view falls back to detailed"),
+mirroring the existing `UpcomingWidget` coverage.
 
-- **Events context** (`events.ex`, `schemas/event.ex`, `paths.ex`): every public
-  function authorizes against the target owner via `Scope.can?/2`; mutations are
-  genuinely load-then-authorize (`reload_and_authorize/3` discards every caller-struct
-  field but `uuid` before reloading and checking the persisted owner);
-  `owner_uuid` is absent from `cast/3` and only ever set via `put_change` after
-  changeset validation — no smuggling path; the `all_day` nilling is bidirectional
-  and matches the DB CHECK; `status`/`color` are real allowlists
-  (`validate_inclusion/3` + DB CHECK), not format checks. Two pre-existing NITPICKs
-  noted but not fixed (over-engineering risk for their likelihood): no
-  `foreign_key_constraint(:owner_uuid)` (an FK violation would raise
-  `Ecto.ConstraintError` instead of returning `{:error, changeset}` — low risk since
-  callers only ever pass a scope-derived or UI-clamped real user uuid), and no
-  optimistic lock on `update_event`/`delete_event` (narrow concurrent-delete window,
-  cosmetic impact only).
-- **Participants/Sources** (`participants.ex`, `sources.ex`,
-  `schemas/participant.ex`): cross-source dedup precedence (user > staff > contact,
-  unlinked always survives) is correctly implemented via a single `seen` MapSet
-  threaded in source-priority order; search results are genuinely name+icon+sublabel
-  only, no PII leak; the `limit+1`-per-source / `has_more` pagination has no
-  off-by-one, computed from pre-dedup counts so dedup can't produce a false "no
-  more"; source filtering happens *before* querying (no existence/count leak for
-  disallowed sources); free-text participants are structurally excluded from
-  notification (`resolve_user/1` has no clause for `kind: "free_text"`).
-  One IMPROVEMENT-MEDIUM nitpick left as-is: `canonicalize_added/1`/`notify_added/3`
-  issue one query per newly-added participant — bounded by how many people a human
-  adds in one save, not attacker-controlled, so real-world impact is negligible.
-- **`CalendarLive`** (beyond the mount finding above): subscribe-before-first-read is
-  correct; the `{:calendar_event_changed, owner_uuid}` handler's in-view comparison is
-  correct and reloads against the fresh scope, not a mount-time closure; the
-  timezone frame-conversion ordering (`@input_tz` used to convert *before* it's
-  recomputed on a checkbox toggle — the exact bug class AGENTS.md warns about) is
-  correct; the inclusive/exclusive all-day date shift is applied exactly once per
-  direction with no double-shift; authorization is genuinely mirror-only — every
-  mutation handler still routes through the context's real authorization.
-- **Widgets/main module** (beyond the sort bug above): all three widgets query
-  strictly through the viewer's own `scope` (no bypass, no `Repo` calls in widget
-  code); nil scope/settings/size degrade to an empty state rather than raising;
-  the 60-day horizon, `limit`, and `show_location` settings are genuinely honored,
-  not hardcoded; `mini_month`'s day-bucketing and month-boundary math are correct,
-  cancelled events excluded; all UI strings go through `gettext/1`.
-  Minor doc-completeness gap (not a code bug): `permission_metadata/0` declares
-  three additional invite-scoped sub-permissions
-  (`invite_platform_users`/`invite_staff`/`invite_crm`) that are real and correctly
-  enforced but absent from AGENTS.md's summary permission table.
+### No other correctness issues found
 
-## Test coverage gaps (not fixed — flagged for a follow-up PR)
-
-The test-suite review found two documented invariants with **zero** coverage at the
-`CalendarLive` layer (the context-level equivalents are well tested):
-
-1. **PubSub-driven selective reload** — no test drives a live `view.pid` with
-   `{:calendar_event_changed, owner_uuid}` to confirm a viewed owner reloads and a
-   non-viewed owner doesn't. `edge_and_pubsub_test.exs` only proves the context
-   broadcasts to a raw `Phoenix.PubSub` subscriber, never through a real LiveView.
-2. **Mid-session permission revocation** — no test mutates a running LiveView's
-   scope between two interactions to confirm a revoked `view_others`/`edit_others`
-   doesn't retain stale access from mount. `test/support/hooks.ex` only assigns
-   scope once, at mount.
-
-These weren't introduced by this PR's fixes, so they're out of scope for this pass,
-but they're the highest-value next tests given how central "fresh scope, not a
-mount-time copy" is to this module's whole security story.
+- `assigns[:view] in ["detailed", "compact"] && assigns[:view]) || "detailed"` (both
+  widgets) correctly defaults on `nil`, an unrecognized string, or absence — verified
+  against the "unknown view falls back to detailed" tests.
+- The old `WidgetSupport.compact?/1` height-flag helper was fully removed with no
+  dangling callers (`compact?`/`:compact` grep across `lib/` and `test/` — no hits).
+  `fit_text/3`'s `clamp(min, preferred, max)` argument order is consistent across all
+  eight call sites (min < max in every case).
+- `Upcoming`'s padding-slot count scales to the user's `limit` setting (up to 20)
+  rather than a fixed floor like `Today`'s (fixed at 4). At a high `limit` with few
+  real events this reserves a lot of visually empty slot space — a deliberate
+  documented tradeoff (the `N-SLOT self-fit: the limit budget of slots` comment), not
+  a bug: it keeps the widget's visual rhythm stable as events come and go, rather than
+  jumping around.
+- `mix format`/`compile --warnings-as-errors`/`credo --strict` were all clean already
+  on the merged PR; no dead code or leftover references to the removed API.
 
 ## Validation gate
 
-Run with `PHOENIX_KIT_PATH=../phoenix_kit` per AGENTS.md's cross-repo-gate note:
+Run with `PHOENIX_KIT_PATH=../phoenix_kit` per `AGENTS.md`'s cross-repo-gate note
+(`PHOENIX_LIVE_CALENDAR_PATH` intentionally left unset — no local checkout of that repo
+exists in this workspace, so it resolves to the published Hex package instead, which is
+within the module's supported range).
 
-- `mix format` — clean (only the intentionally-edited files changed).
-- `mix compile --warnings-as-errors` (dev) and `MIX_ENV=test mix compile --warnings-as-errors --force` — clean, no warnings.
-- `mix credo --strict` — 339 mods/funs analyzed, no issues.
-- `mix test` — **could not run the DB-backed portion**: this sandbox has no
-  PostgreSQL server and no root access to install/start one (`apt-get install
-  postgresql` fails with "are you root?"). The 11 DB-independent tests that do
-  run (defensive-default / no-database-connection tests) pass; the other 98 are
-  tagged and skipped for lack of a DB connection, which is expected in an
-  environment without Postgres, not a code failure. Since `mix test` compiles
-  the entire suite before filtering by tag, this run did confirm every touched
-  test file — including the two new regression tests added in this review —
-  compiles without error. **The DB-backed suite (`mix test.setup && mix test`)
-  should still be run in a real environment with Postgres before this is
-  merged/released**, since that's the only way to actually execute the new
-  regression tests and the rest of the suite.
+- **Environment fix required first:** `mix test` initially failed to even boot
+  (`Could not start application ueberauth_apple`) — `mix.lock` was stale relative to
+  the local `phoenix_kit` path dependency, which recently dropped `ueberauth_apple` /
+  `httpoison` (unmaintained + CVE cleanup, per its own `mix.exs` comments). `mix
+  deps.get` resolved it; `mix.lock` in this repo was already free of those entries
+  after regeneration (no diff to commit) — this was pre-existing local-checkout drift,
+  unrelated to PR #4's own changes.
+- `mix format --check-formatted` — clean.
+- `mix compile --warnings-as-errors` (dev and test) — clean, no warnings, before and
+  after this review's fixes.
+- `mix credo --strict` — 339 mods/funs analyzed, no issues, before and after.
+- `mix test` — **could not run the DB-backed portion**: no PostgreSQL server and no
+  root access in this sandbox (same constraint noted in the PR #2 review). 12
+  DB-independent tests pass; 103 DB-dependent tests are tagged and skipped (was 100
+  before this review added 3 new tests — all three, including the mini-month
+  regression test, compile and get correctly tag-excluded, confirming they're
+  well-formed). **The DB-backed suite (`mix test.setup && mix test`) should still be
+  run in a real environment with Postgres before/after merge** to actually execute the
+  new regression tests.
 
 ## Not addressed
 
 Per `AGENTS.md`: **"Releases/version bumps are Max-only — PRs land at the current
-version."** No version bump, CHANGELOG entry, or Hex publish was performed as part
-of this review, regardless of how the review was invoked.
+version."** No version bump, CHANGELOG entry, or Hex publish was performed, regardless
+of how this review was invoked. The version remains `0.1.0`.
