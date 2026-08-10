@@ -31,7 +31,7 @@ Owner always has everything; Admin defaults to everything (Owner-revocable).
 ```elixir
 def deps do
   [
-    {:phoenix_kit_calendar, "~> 0.1"}
+    {:phoenix_kit_calendar, "~> 0.2"}
   ]
 end
 ```
