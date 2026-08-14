@@ -1372,7 +1372,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
           class="mb-3"
         >
           <span class="label">
-            <span class="label-text font-semibold">
+            <span class="fieldset-legend font-semibold">
               {gettext("Calendar")}
             </span>
           </span>
@@ -1534,7 +1534,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
                  same blue as the first swatch, so Blue IS the default. --%>
             <fieldset>
               <legend class="label">
-                <span class="label-text font-semibold">
+                <span class="fieldset-legend font-semibold">
                   {gettext("Color")}
                 </span>
               </legend>
@@ -1582,7 +1582,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
           <%!-- Participants (outside the event form — chips + search live in
                assigns, saved via replace_participants after the event) --%>
           <div class="mt-4 space-y-2">
-            <p class="label-text font-semibold">
+            <p class="fieldset-legend font-semibold">
               {gettext("Participants")}
             </p>
 
