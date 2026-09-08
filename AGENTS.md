@@ -53,6 +53,11 @@ PHOENIX_LIVE_CALENDAR_PATH=../phoenix_live_calendar mix test
 `mix test.setup` / `mix test.reset` are aliases for creating / dropping and
 recreating the test database.
 
+Repo-local aliases:
+
+- `mix quality` — `format` + `credo --strict` + `dialyzer` (applies formatting).
+- `mix quality.ci` — `format --check-formatted` + `credo --strict` + `dialyzer`: it CHECKS formatting rather than applying it, so run `mix format` first.
+
 ## Conventions
 
 - Module key `calendar`; tab id `:admin_calendar`; URL segment `calendar`. Sub-permission keys are dotted: `calendar.view_others`, `calendar.edit_others`, `calendar.invite_platform_users`, `calendar.invite_staff`, `calendar.invite_crm`.
