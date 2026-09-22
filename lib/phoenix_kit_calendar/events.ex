@@ -516,8 +516,8 @@ defmodule PhoenixKitCalendar.Events do
     _ -> changeset
   end
 
-  # Activity logging — guarded so a logging failure (or core without the
-  # Activity module) never breaks the primary operation.
+  # Activity logging — core's `PhoenixKit.Activity.log/3` never raises, so a
+  # logging failure never breaks the primary operation.
   #
   # PRIVACY: the core activity feed (`/admin/activity`) is visible to any
   # holder of the dashboard/activity permission — BROADER than calendar
