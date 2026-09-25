@@ -140,7 +140,7 @@ defmodule PhoenixKitCalendar.Participants do
 
     # `apply_replace` is only reached after `can_edit?` passed, which is
     # false for a nil scope — so scope is a real `%Scope{}` here.
-    added_by = Scope.user_uuid(scope)
+    added_by = PhoenixKitWeb.Actor.uuid(scope)
     Enum.each(added, &insert_participant!(event, &1, added_by))
 
     {raw_list_for_event(event.uuid), added}
@@ -223,7 +223,7 @@ defmodule PhoenixKitCalendar.Participants do
   # actor adding themselves. Guarded — a logging failure never breaks the
   # save.
   defp notify_added(scope, event, added) do
-    actor_uuid = scope && Scope.user_uuid(scope)
+    actor_uuid = PhoenixKitWeb.Actor.uuid(scope)
 
     Enum.each(added, &log_participant_added(event, &1, actor_uuid))
   rescue

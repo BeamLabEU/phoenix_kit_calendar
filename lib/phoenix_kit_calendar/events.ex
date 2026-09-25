@@ -231,7 +231,7 @@ defmodule PhoenixKitCalendar.Events do
   """
   @spec participant?(Scope.t() | nil, Event.t()) :: boolean()
   def participant?(scope, %Event{} = event) do
-    case scope && Scope.user_uuid(scope) do
+    case PhoenixKitWeb.Actor.uuid(scope) do
       nil ->
         false
 
@@ -539,7 +539,7 @@ defmodule PhoenixKitCalendar.Events do
   # log never raises.
   defp log_activity(event, action, scope, opts) do
     PhoenixKit.Activity.log("calendar", action,
-      actor_uuid: Keyword.get(opts, :actor_uuid, scope && Scope.user_uuid(scope)),
+      actor_uuid: Keyword.get(opts, :actor_uuid, PhoenixKitWeb.Actor.uuid(scope)),
       resource_type: "calendar_event",
       resource_uuid: event.uuid,
       metadata: %{"owner_uuid" => event.owner_uuid}
