@@ -13,7 +13,7 @@ carry participants drawn from platform users, staff, and CRM contacts and
 companies, plus a linked location; all of that is read schemalessly from the
 sibling tables, so no sibling module code is required.
 
-- **Depends on:** `phoenix_kit` `~> 2.0` (Hex), `phoenix_live_calendar` `~> 0.2` (hard; the server-rendered month component, `MiniCalendar`, and the hook bundle), `phoenix_live_view` `~> 1.1`.
+- **Depends on:** `phoenix_kit` `>= 2.38.0 and < 3.0.0` (Hex), `phoenix_live_calendar` `~> 0.2` (hard; the server-rendered month component, `MiniCalendar`, and the hook bundle), `phoenix_live_view` `~> 1.1`.
 - **Consumed by:** nothing calls the `Events` API. `phoenix_kit_dashboards` discovers `phoenix_kit_widgets/0` at runtime (duck-typed, one-way; no dependency in either direction).
 - **Admin surface:** one tab, `:admin_calendar` at `/admin/calendar` (`Web.CalendarLive`, `live_view:` routing, group `:admin_modules`, priority 645, `match: :prefix`, permission `calendar`).
 - **Module key** `"calendar"`; settings prefix `calendar_` (`calendar_enabled`).
@@ -80,7 +80,7 @@ Repo-local aliases:
 - Live updates: each committed mutation broadcasts `{:calendar_event_changed, owner_uuid}` on `Events.pubsub_topic/0` via `PhoenixKit.Config.pubsub_server/0` (no-op when the host configures none). Minimal payload — owner uuid only, no record, no PII.
 - Widgets query through the authorized context path with the widget's `scope` assign — a shared dashboard never leaks anyone else's events — and render defensively (nil scope/settings/size → empty state, never a crash) via `Web.WidgetSupport`, every helper of which answers in the VIEWER's frame.
 - Soft-delete: none of its own; participant resolution and the search sources exclude rows with `status = 'trashed'` in the staff/CRM/locations tables.
-- The `:phoenix_kit` requirement stays a two-segment `~> 2.0` (a three-segment `~> 2.0.x` excludes every later core minor and breaks `mix deps.get` for consumers); core features above the floor are feature-detected. `test/core_pin_conformance_test.exs` pins this and fails if a `path:` dep is committed.
+- The `:phoenix_kit` requirement keeps the compound `>= 2.38.0 and < 3.0.0` form (a three-segment `~> 2.38.x` excludes every later core minor and breaks `mix deps.get` for consumers); the floor carries `PhoenixKitWeb.Actor` and `Activity.log/3`, which are called directly, and core features above the floor are feature-detected. `test/core_pin_conformance_test.exs` pins this and fails if a `path:` dep is committed.
 
 ### Landmines
 

@@ -86,7 +86,12 @@ defmodule PhoenixKitCalendar.MixProject do
       # the standalone suite is red against the published pin; develop with
       # PHOENIX_KIT_PATH=../phoenix_kit. `disabled`/`wrapper_class`/`title`/
       # `:description` on the shared `<.checkbox>` component ship in 1.7.184.
-      pk_dep(:phoenix_kit, "~> 2.0"),
+      # 2.38.0 is the floor now: the actor and the activity log come from
+      # `PhoenixKitWeb.Actor` and `PhoenixKit.Activity.log/3`, first shipped
+      # there and no longer feature-detected, so a lower core fails to compile.
+      # Patch-precise floor in the compound form, so the ceiling stays open
+      # through every later 2.x minor (see test/core_pin_conformance_test.exs).
+      pk_dep(:phoenix_kit, ">= 2.38.0 and < 3.0.0"),
 
       # The server-rendered calendar component (month view etc.).
       pk_dep(:phoenix_live_calendar, "~> 0.2"),
