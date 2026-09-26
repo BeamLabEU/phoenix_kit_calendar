@@ -1,3 +1,23 @@
+## 0.2.3 - 2026-09-26
+
+### Changed
+
+- **Requires `phoenix_kit >= 2.38.0 and < 3.0.0`.** Activity entries go through
+  core's `PhoenixKit.Activity.log/3`, which never raises, and the acting user is
+  read with `PhoenixKitWeb.Actor` — both first shipped in core 2.38.0, so they
+  are called directly rather than feature-detected. Logged rows are unchanged.
+
+### Fixed
+
+- **A scope carrying a plain-map user is read the same everywhere.**
+  `Scope.user_uuid/1` only matches a `%User{}` struct, so such a scope logged
+  no actor, and the calendar page and dashboard widgets saw no viewer — no own
+  calendar, empty widgets — while the context still authorized the user. Every
+  actor and viewer read now goes through `PhoenixKitWeb.Actor.uuid/1`.
+- Adding participants no longer crashes the page when resolving who to notify
+  times out on the database after the save has committed; the notification is
+  skipped and the participants stay saved.
+
 ## 0.2.2 - 2026-09-07
 
 ### Fixed

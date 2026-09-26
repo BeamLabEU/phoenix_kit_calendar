@@ -1,7 +1,7 @@
 defmodule PhoenixKitCalendar.MixProject do
   use Mix.Project
 
-  @version "0.2.2"
+  @version "0.2.3"
   @source_url "https://github.com/BeamLabEU/phoenix_kit_calendar"
 
   def project do
@@ -81,11 +81,7 @@ defmodule PhoenixKitCalendar.MixProject do
   defp deps do
     [
       # PhoenixKit provides the Module behaviour, Settings, auth Scope, and
-      # the V141 calendar-events migration. Sub-permissions (Scope.can?/2)
-      # and the events table ship in the release after 1.7.179 — until then
-      # the standalone suite is red against the published pin; develop with
-      # PHOENIX_KIT_PATH=../phoenix_kit. `disabled`/`wrapper_class`/`title`/
-      # `:description` on the shared `<.checkbox>` component ship in 1.7.184.
+      # the V141 calendar-events migration.
       # 2.38.0 is the floor now: the actor and the activity log come from
       # `PhoenixKitWeb.Actor` and `PhoenixKit.Activity.log/3`, first shipped
       # there and no longer feature-detected, so a lower core fails to compile.

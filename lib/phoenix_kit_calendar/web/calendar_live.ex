@@ -102,7 +102,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
   @impl true
   def mount(_params, _session, socket) do
     scope = socket.assigns[:phoenix_kit_current_scope]
-    own_uuid = scope && Scope.user_uuid(scope)
+    own_uuid = PhoenixKitWeb.Actor.uuid(scope)
 
     # Subscribe BEFORE the first event read so a change committed in the gap
     # isn't missed. Broadcasts are filtered by owner against the current view.

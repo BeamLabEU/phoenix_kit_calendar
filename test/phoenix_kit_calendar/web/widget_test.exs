@@ -165,6 +165,16 @@ defmodule PhoenixKitCalendar.Web.WidgetTest do
       assert html =~ "Alice today"
       refute html =~ "Bob today"
     end
+
+    test "viewer_uuid reads a plain-map user the way the context does", %{alice: alice} do
+      assert WidgetSupport.viewer_uuid(scope_for(alice)) == alice.uuid
+
+      assert WidgetSupport.viewer_uuid(%{scope_for(alice) | user: %{uuid: alice.uuid}}) ==
+               alice.uuid
+
+      assert WidgetSupport.viewer_uuid(nil) == nil
+      assert WidgetSupport.viewer_uuid(%Scope{user: nil}) == nil
+    end
   end
 
   describe "mini_month sizing (regression: a 6-row month must not be silently clipped)" do

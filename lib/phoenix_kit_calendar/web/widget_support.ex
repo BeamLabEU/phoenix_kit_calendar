@@ -13,7 +13,6 @@ defmodule PhoenixKitCalendar.Web.WidgetSupport do
   core's per-instant helpers).
   """
 
-  alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKitCalendar.Events
   alias PhoenixKitCalendar.Schemas.Event
 
@@ -31,16 +30,7 @@ defmodule PhoenixKitCalendar.Web.WidgetSupport do
 
   @doc "The viewer's user uuid, or nil when there is no authenticated scope."
   @spec viewer_uuid(term()) :: binary() | nil
-  def viewer_uuid(scope) do
-    with true <- not is_nil(scope),
-         uuid when is_binary(uuid) <- Scope.user_uuid(scope) do
-      uuid
-    else
-      _ -> nil
-    end
-  rescue
-    _ -> nil
-  end
+  def viewer_uuid(scope), do: PhoenixKitWeb.Actor.uuid(scope)
 
   @doc "The viewer's LOCAL today (their offset frame), not UTC today."
   @spec local_today(term()) :: Date.t()

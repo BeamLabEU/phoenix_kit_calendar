@@ -77,4 +77,16 @@ defmodule PhoenixKitCalendar.ActivityTest do
       actor_uuid: alice.uuid
     )
   end
+
+  test "a scope carrying a plain-map user still logs its actor", %{alice: alice} do
+    # Scope.user_uuid/1 matches only a %User{}; the actor is read with
+    # PhoenixKitWeb.Actor, which takes any user map with a uuid.
+    scope = %{scope_for(alice) | user: %{uuid: alice.uuid}}
+    {:ok, event} = Events.create_event(scope, alice.uuid, timed_attrs("Map user"))
+
+    assert_activity_logged("calendar_event.created",
+      resource_uuid: event.uuid,
+      actor_uuid: alice.uuid
+    )
+  end
 end

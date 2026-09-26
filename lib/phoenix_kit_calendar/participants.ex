@@ -230,6 +230,10 @@ defmodule PhoenixKitCalendar.Participants do
     # Resolving a participant to a user reads other modules' tables; a
     # failure there must not undo the participants already saved.
     _ -> :ok
+  catch
+    # A dead pool / checkout timeout exits rather than raises; the save has
+    # already committed, so it must not crash the caller either.
+    :exit, _ -> :ok
   end
 
   defp log_participant_added(event, entry, actor_uuid) do
