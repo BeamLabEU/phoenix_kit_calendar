@@ -140,7 +140,7 @@ defmodule PhoenixKitCalendar.Participants do
 
     # `apply_replace` is only reached after `can_edit?` passed, which is
     # false for a nil scope — so scope is a real `%Scope{}` here.
-    added_by = Scope.user_uuid(scope)
+    added_by = PhoenixKitWeb.Actor.uuid(scope)
     Enum.each(added, &insert_participant!(event, &1, added_by))
 
     {raw_list_for_event(event.uuid), added}
@@ -223,12 +223,12 @@ defmodule PhoenixKitCalendar.Participants do
   # actor adding themselves. Guarded — a logging failure never breaks the
   # save.
   defp notify_added(scope, event, added) do
-    actor_uuid = scope && Scope.user_uuid(scope)
+    actor_uuid = PhoenixKitWeb.Actor.uuid(scope)
 
-    if Code.ensure_loaded?(PhoenixKit.Activity) do
-      Enum.each(added, &log_participant_added(event, &1, actor_uuid))
-    end
+    Enum.each(added, &log_participant_added(event, &1, actor_uuid))
   rescue
+    # Resolving a participant to a user reads other modules' tables; a
+    # failure there must not undo the participants already saved.
     _ -> :ok
   end
 
@@ -236,10 +236,7 @@ defmodule PhoenixKitCalendar.Participants do
     target = Sources.resolve_user(entry)
 
     if is_binary(target) and target != actor_uuid do
-      PhoenixKit.Activity.log(%{
-        action: "calendar_event.participant_added",
-        module: "calendar",
-        mode: "manual",
+      PhoenixKit.Activity.log("calendar", "calendar_event.participant_added",
         actor_uuid: actor_uuid,
         resource_type: "calendar_event",
         resource_uuid: event.uuid,
@@ -251,7 +248,7 @@ defmodule PhoenixKitCalendar.Participants do
         metadata: %{
           "notification_text" => notification_text()
         }
-      })
+      )
     end
   end
 

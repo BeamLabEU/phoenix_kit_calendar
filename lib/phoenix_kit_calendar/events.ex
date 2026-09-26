@@ -231,7 +231,7 @@ defmodule PhoenixKitCalendar.Events do
   """
   @spec participant?(Scope.t() | nil, Event.t()) :: boolean()
   def participant?(scope, %Event{} = event) do
-    case scope && Scope.user_uuid(scope) do
+    case PhoenixKitWeb.Actor.uuid(scope) do
       nil ->
         false
 
@@ -516,8 +516,8 @@ defmodule PhoenixKitCalendar.Events do
     _ -> changeset
   end
 
-  # Activity logging — guarded so a logging failure (or core without the
-  # Activity module) never breaks the primary operation.
+  # Activity logging — core's `PhoenixKit.Activity.log/3` never raises, so a
+  # logging failure never breaks the primary operation.
   #
   # PRIVACY: the core activity feed (`/admin/activity`) is visible to any
   # holder of the dashboard/activity permission — BROADER than calendar
@@ -535,25 +535,15 @@ defmodule PhoenixKitCalendar.Events do
   defp tap_log(result, _action, _scope, _opts), do: result
 
   # Isolated from broadcast_event_changed/1: a logging failure must never
-  # suppress the live-update broadcast for a successful mutation.
+  # suppress the live-update broadcast for a successful mutation — core's
+  # log never raises.
   defp log_activity(event, action, scope, opts) do
-    if Code.ensure_loaded?(PhoenixKit.Activity) do
-      actor_uuid = Keyword.get(opts, :actor_uuid, scope && Scope.user_uuid(scope))
-
-      PhoenixKit.Activity.log(%{
-        action: action,
-        module: "calendar",
-        mode: "manual",
-        actor_uuid: actor_uuid,
-        resource_type: "calendar_event",
-        resource_uuid: event.uuid,
-        metadata: %{
-          "owner_uuid" => event.owner_uuid
-        }
-      })
-    end
-  rescue
-    _ -> :ok
+    PhoenixKit.Activity.log("calendar", action,
+      actor_uuid: Keyword.get(opts, :actor_uuid, PhoenixKitWeb.Actor.uuid(scope)),
+      resource_type: "calendar_event",
+      resource_uuid: event.uuid,
+      metadata: %{"owner_uuid" => event.owner_uuid}
+    )
   end
 
   # Announce a committed change with a minimal payload (owner uuid only — no
