@@ -171,9 +171,16 @@ defmodule PhoenixKitCalendar.ExternalSources do
   not a stored one), so the page still does what was asked for this visit.
   """
   @spec set_hidden(map() | nil, String.t(), boolean()) :: [String.t()]
-  def set_hidden(user, key, hidden?) when is_binary(key) do
-    current = hidden(user)
+  def set_hidden(user, key, hidden?), do: set_hidden(user, hidden(user), key, hidden?)
 
+  @doc """
+  Like `set_hidden/3`, from the keys the caller already holds as hidden.
+  A page that has toggled before must pass its own list: the user struct it
+  was mounted with still carries the `custom_fields` of mount time, so
+  reading `current` from it would drop every earlier toggle.
+  """
+  @spec set_hidden(map() | nil, [String.t()], String.t(), boolean()) :: [String.t()]
+  def set_hidden(user, current, key, hidden?) when is_list(current) and is_binary(key) do
     next =
       if hidden?,
         do: Enum.sort(Enum.uniq([key | current])),
@@ -184,7 +191,8 @@ defmodule PhoenixKitCalendar.ExternalSources do
   end
 
   defp persist(%User{} = user, keys) do
-    if function_exported?(Auth, :merge_user_custom_fields, 3) do
+    # ensure_loaded before function_exported?: the latter never loads a module
+    if Code.ensure_loaded?(Auth) and function_exported?(Auth, :merge_user_custom_fields, 3) do
       apply(Auth, :merge_user_custom_fields, [
         user,
         %{@hidden_field => keys},
@@ -214,13 +222,14 @@ defmodule PhoenixKitCalendar.ExternalSources do
       when is_list(sources) and is_binary(user_uuid) do
     results = Enum.map(sources, &source_items(&1, user_uuid, from, until))
 
+    sorted =
+      results
+      |> Enum.flat_map(& &1.items)
+      |> Enum.sort_by(& &1.starts_at, {:asc, DateTime})
+
     %{
-      items:
-        results
-        |> Enum.flat_map(& &1.items)
-        |> Enum.sort_by(& &1.starts_at, {:asc, DateTime})
-        |> Enum.take(@cap),
-      truncated: Enum.any?(results, & &1.truncated)
+      items: Enum.take(sorted, @cap),
+      truncated: length(sorted) > @cap or Enum.any?(results, & &1.truncated)
     }
   end
 
@@ -245,12 +254,28 @@ defmodule PhoenixKitCalendar.ExternalSources do
     :exit, _ -> %{items: [], truncated: false}
   end
 
-  # The least an item must be to be drawn.
-  defp item?(%{id: id, title: title, starts_at: %DateTime{}})
-       when is_binary(id) and is_binary(title),
-       do: true
+  # The least an item must be to be drawn — and every optional field that the
+  # page reads or renders is the type it reads it as, so one sloppy item
+  # (a string for `ends_at`) is dropped instead of crashing the LiveView.
+  defp item?(%{id: id, title: title, starts_at: %DateTime{}} = item)
+       when is_binary(id) and is_binary(title) do
+    optional?(item, :ends_at, &match?(%DateTime{}, &1)) and
+      optional?(item, :starts_on, &match?(%Date{}, &1)) and
+      optional?(item, :ends_on, &match?(%Date{}, &1)) and
+      optional?(item, :label, &is_binary/1) and
+      optional?(item, :location, &is_binary/1) and
+      optional?(item, :url, &is_binary/1) and
+      optional?(item, :status, &is_binary/1)
+  end
 
   defp item?(_), do: false
+
+  defp optional?(item, field, valid?) do
+    case Map.get(item, field) do
+      nil -> true
+      value -> valid?.(value)
+    end
+  end
 
   @doc "The id an item has on the calendar grid — never a stored event's uuid."
   @spec item_id(map()) :: String.t()

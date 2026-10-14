@@ -381,7 +381,15 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
 
       {:noreply,
        socket
-       |> assign(:hidden_sources, ExternalSources.set_hidden(user, key, hide?))
+       |> assign(
+         :hidden_sources,
+         ExternalSources.set_hidden(
+           user,
+           socket.assigns.hidden_sources,
+           key,
+           hide?
+         )
+       )
        |> reload_events()}
     else
       {:noreply, socket}
@@ -781,6 +789,16 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
       location: Map.get(item, :location),
       status: status_atom(Map.get(item, :status))
     }
+  end
+
+  # An all-day item is dates, not an instant: no zone shift, and the
+  # exclusive end shown as its last day.
+  defp item_when(%{all_day: true, starts_on: %Date{} = first} = item, _tz) do
+    last = Date.add(Map.get(item, :ends_on) || Date.add(first, 1), -1)
+
+    if Date.compare(last, first) == :gt,
+      do: "#{Date.to_iso8601(first)} – #{Date.to_iso8601(last)}",
+      else: Date.to_iso8601(first)
   end
 
   defp item_when(item, tz) do

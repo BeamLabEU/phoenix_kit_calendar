@@ -15,7 +15,12 @@ defmodule PhoenixKitCalendar.Web.ExternalItemsLiveTest do
   defmodule Provider do
     @moduledoc false
     def phoenix_kit_calendar_sources,
-      do: [%{key: "crm", label: "Client interactions", items: {__MODULE__, :items}}]
+      do: [
+        %{key: "crm", label: "Client interactions", items: {__MODULE__, :items}},
+        %{key: "docs", label: "Deadlines", items: {__MODULE__, :none}}
+      ]
+
+    def none(_user_uuid, _from, _until), do: %{items: [], truncated: false}
 
     def items(user_uuid, _from, _until) do
       today = Date.utc_today()
@@ -31,6 +36,14 @@ defmodule PhoenixKitCalendar.Web.ExternalItemsLiveTest do
             status: "planned",
             location: "ANDI showroom",
             url: "/en/admin/crm/companies/x?tab=interactions"
+          },
+          %{
+            id: "allday",
+            title: "Trade fair",
+            all_day: true,
+            starts_on: Date.add(today, 1),
+            ends_on: Date.add(today, 4),
+            starts_at: DateTime.new!(Date.add(today, 1), ~T[00:00:00], "Etc/UTC")
           },
           %{
             id: "two",
@@ -101,6 +114,23 @@ defmodule PhoenixKitCalendar.Web.ExternalItemsLiveTest do
     assert html =~ "Site visit for"
   end
 
+  test "toggling a second source keeps the first one hidden, on the page and in storage", %{
+    conn: conn,
+    me: me
+  } do
+    {:ok, view, _html} = conn |> login(me, ["calendar"]) |> live(@path)
+
+    view |> element("#calendar-source-crm") |> render_click()
+    html = view |> element("#calendar-source-docs") |> render_click()
+
+    refute html =~ "Site visit for"
+    assert ExternalSources.hidden(Auth.get_user(me.uuid)) == ["crm", "docs"]
+
+    html = view |> element("#calendar-source-docs") |> render_click()
+    refute html =~ "Site visit for"
+    assert ExternalSources.hidden(Auth.get_user(me.uuid)) == ["crm"]
+  end
+
   test "an unknown source key changes nothing", %{conn: conn, me: me} do
     {:ok, view, _html} = conn |> login(me, ["calendar"]) |> live(@path)
     assert render_click(view, "toggle_source", %{"key" => "nope"}) =~ "Site visit for"
@@ -124,6 +154,21 @@ defmodule PhoenixKitCalendar.Web.ExternalItemsLiveTest do
 
     send(view.pid, {:calendar_event_click, ExternalSources.item_id(%{source: "crm", id: "two"})})
     assert render(view) =~ "Cancelled"
+
+    # an all-day item is dates (the exclusive end shown as its last day), not a clock time
+    today = Date.utc_today()
+
+    send(
+      view.pid,
+      {:calendar_event_click, ExternalSources.item_id(%{source: "crm", id: "allday"})}
+    )
+
+    html = render(view)
+
+    assert html =~
+             "#{Date.to_iso8601(Date.add(today, 1))} – #{Date.to_iso8601(Date.add(today, 3))}"
+
+    refute html =~ "00:00"
 
     # closing it leaves the page ready for a real event again
     render_click(view, "close_modal", %{})

@@ -39,7 +39,11 @@ defmodule PhoenixKitCalendar.ExternalSourcesTest do
           %{id: "a", title: "Sooner", starts_at: ~U[2026-10-11 09:00:00Z], status: "cancelled"},
           # not drawable: no start, no title
           %{id: "c", title: "No start"},
-          %{id: "d", starts_at: ~U[2026-10-11 09:00:00Z]}
+          %{id: "d", starts_at: ~U[2026-10-11 09:00:00Z]},
+          # drawable only if the optional fields are what the page reads them as
+          %{id: "e", title: "Bad end", starts_at: ~U[2026-10-11 09:00:00Z], ends_at: "noon"},
+          %{id: "f", title: "Bad day", starts_at: ~U[2026-10-11 09:00:00Z], starts_on: "today"},
+          %{id: "g", title: "Bad place", starts_at: ~U[2026-10-11 09:00:00Z], location: %{}}
         ],
         truncated: true
       }
@@ -47,6 +51,18 @@ defmodule PhoenixKitCalendar.ExternalSourcesTest do
 
     def boom(_user_uuid, _from, _until), do: raise("boom")
     def odd(_user_uuid, _from, _until), do: :nonsense
+  end
+
+  defmodule Many do
+    @moduledoc false
+    def items(_user_uuid, _from, _until) do
+      items =
+        for n <- 1..301 do
+          %{id: "m#{n}", title: "Item #{n}", starts_at: DateTime.add(~U[2026-10-01 00:00:00Z], n)}
+        end
+
+      %{items: items, truncated: false}
+    end
   end
 
   defmodule RaisingProvider do
@@ -89,6 +105,18 @@ defmodule PhoenixKitCalendar.ExternalSourcesTest do
     refute ExternalSources.item_id?(Ecto.UUID.generate())
   end
 
+  test "items/4: more than the cap in total is reported as truncated" do
+    assert %{items: items, truncated: true} =
+             ExternalSources.items(
+               [%{key: "many", label: "Many", module_key: nil, items: {__MODULE__.Many, :items}}],
+               Ecto.UUID.generate(),
+               ~U[2026-10-01 00:00:00Z],
+               ~U[2026-11-01 00:00:00Z]
+             )
+
+    assert length(items) == 300
+  end
+
   test "items/4 with nobody to ask for, or no sources, is empty" do
     assert ExternalSources.items(
              [],
@@ -122,6 +150,18 @@ defmodule PhoenixKitCalendar.ExternalSourcesTest do
 
     assert ExternalSources.set_hidden(user, "meetings", false) == []
     assert ExternalSources.hidden(Auth.get_user(user.uuid)) == []
+  end
+
+  test "set_hidden/4 builds on the keys the page holds, not on a stale user struct" do
+    {:ok, user} =
+      Auth.register_user(%{
+        email: "src_#{System.unique_integer([:positive])}@example.com",
+        password: "ValidPassword123!"
+      })
+
+    assert ExternalSources.set_hidden(user, ["a"], "b", true) == ["a", "b"]
+    assert ExternalSources.hidden(Auth.get_user(user.uuid)) == ["a", "b"]
+    assert ExternalSources.set_hidden(user, ["a", "b"], "a", false) == ["b"]
   end
 
   test "a user that is not a stored one still gets the answer for this visit" do
