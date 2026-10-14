@@ -144,6 +144,7 @@ Tables (core's chain), UUIDv7 PKs, `use PhoenixKit.SchemaPrefix` on both schemas
 | Setting | `calendar_enabled` (boolean) |
 | Activity actions | `calendar_event.created` / `.updated` / `.deleted` / `.participant_added`; `resource_type: "calendar_event"` |
 | URL state | `?people=uuid,uuid` or `?people=all`; absent = own calendar |
+| External sources (`phoenix_kit_calendar_sources/0`) | Another module's read-only items on a person's OWN calendar: `[%{key, label, module_key, items: {mod, fun}}]`, `fun.(user_uuid, from, until)` → `%{items, truncated}` (`ExternalSources` moduledoc has the item shape). Asked for the window on every load, never copied; the SOURCE decides what the user may see. Grid id `"ext:<source>:<id>"` (never an event uuid), opened read-only with the item's `url`. Hidden per person on `custom_fields["calendar_hidden_sources"]`. Not on the widgets yet |
 | Widgets (`phoenix_kit_widgets/0`) | `calendar.upcoming` (`limit`, `show_location`; 60-day horizon), `calendar.today` (`show_location`; all-day first then by time), `calendar.mini_month` (a dot on each day with events); all `module_key: "calendar"`, sizes in the dashboards lattice |
 
 ## Database & migrations

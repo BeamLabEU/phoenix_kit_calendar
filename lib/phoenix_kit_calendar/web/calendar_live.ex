@@ -63,6 +63,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
   alias PhoenixKit.Utils.Date, as: DateUtils
   alias PhoenixKit.Utils.TimeZone
   alias PhoenixKitCalendar.Events
+  alias PhoenixKitCalendar.ExternalSources
   alias PhoenixKitCalendar.Participants
   alias PhoenixKitCalendar.Paths
   alias PhoenixKitCalendar.Schemas.Event
@@ -157,6 +158,14 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
       |> assign(:participant_sources, Sources.available_participant_sources(scope))
       |> assign(:location_options, Sources.list_locations())
       |> assign(:pending_participants, [])
+      # Read-only items other modules put on a person's own calendar
+      # (`ExternalSources`): the sources on offer, the ones this viewer has
+      # hidden, the items in the window, and the one open in the modal.
+      |> assign(:external_sources, ExternalSources.list())
+      |> assign(:hidden_sources, ExternalSources.hidden(scope.user))
+      |> assign(:external_items, [])
+      |> assign(:external_truncated?, false)
+      |> assign(:external_item, nil)
 
     {:ok, socket}
   end
@@ -263,6 +272,22 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     {:noreply, open_modal(socket, nil, changeset)}
   end
 
+  # Another module's item: nothing of ours to load or authorize — the source
+  # already answered only what this viewer may see. It opens read-only.
+  def handle_info({:calendar_event_click, "ext:" <> _ = id}, socket) do
+    case Enum.find(socket.assigns.external_items, &(ExternalSources.item_id(&1) == id)) do
+      nil ->
+        {:noreply, push_event(socket, "pk:dialog-close", %{id: "calendar-event-modal"})}
+
+      item ->
+        {:noreply,
+         socket
+         |> close_modal()
+         |> assign(:external_item, item)
+         |> assign(:show_event_modal, true)}
+    end
+  end
+
   def handle_info({:calendar_event_click, event_id}, socket) do
     case Events.get_event(socket.assigns.phoenix_kit_current_scope, event_id) do
       {:ok, event} ->
@@ -347,6 +372,23 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
   def handle_event("close_modal", _params, socket) do
     {:noreply, close_modal(socket)}
   end
+
+  # Show or hide another module's items on your own calendar; remembered.
+  def handle_event("toggle_source", %{"key" => key}, socket) when is_binary(key) do
+    if Enum.any?(socket.assigns.external_sources, &(&1.key == key)) do
+      user = socket.assigns.phoenix_kit_current_scope.user
+      hide? = key not in socket.assigns.hidden_sources
+
+      {:noreply,
+       socket
+       |> assign(:hidden_sources, ExternalSources.set_hidden(user, key, hide?))
+       |> reload_events()}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("toggle_source", _params, socket), do: {:noreply, socket}
 
   # Rebuilds the event modal from a client-held draft after a websocket
   # reconnect (see the PkDialogDraft hook). The typed field values are trusted
@@ -675,7 +717,90 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
       end
 
     tz = socket.assigns.viewer_tz
-    assign(socket, :calendar_events, Enum.map(events, &to_lib_event(&1, multi?, tz)))
+    %{items: items, truncated: truncated?} = external_items(socket)
+
+    socket
+    |> assign(:external_items, items)
+    |> assign(:external_truncated?, truncated?)
+    |> assign(
+      :calendar_events,
+      Enum.map(events, &to_lib_event(&1, multi?, tz)) ++
+        Enum.map(items, &item_to_lib_event(&1, tz))
+    )
+  end
+
+  # Other modules' items belong to the VIEWER (a source is asked "what is
+  # this user in?"), so they are drawn only while the viewer's own calendar
+  # is among the ones shown — never on a colleague's.
+  defp external_items(socket) do
+    %{own_uuid: own_uuid, selected: selected, window: {from, until}} = socket.assigns
+
+    sources =
+      Enum.reject(
+        socket.assigns.external_sources,
+        &(&1.key in socket.assigns.hidden_sources)
+      )
+
+    if is_binary(own_uuid) and MapSet.member?(selected, own_uuid) and sources != [] do
+      # the window is dates in the viewer's zone: a day of slack either side
+      # covers every offset, and the grid only draws what falls inside
+      ExternalSources.items(
+        sources,
+        own_uuid,
+        DateTime.new!(Date.add(from, -1), ~T[00:00:00], "Etc/UTC"),
+        DateTime.new!(Date.add(until, 1), ~T[00:00:00], "Etc/UTC")
+      )
+    else
+      %{items: [], truncated: false}
+    end
+  end
+
+  # An item on the grid: its own id shape (never a stored event's uuid), one
+  # colour for everything that is not ours, struck through when cancelled.
+  # No end said → an hour, so it has a block to stand in.
+  defp item_to_lib_event(item, viewer_tz) do
+    {start_value, end_value} =
+      if Map.get(item, :all_day) == true and match?(%Date{}, Map.get(item, :starts_on)) do
+        {item.starts_on, Map.get(item, :ends_on) || Date.add(item.starts_on, 1)}
+      else
+        ends_at = Map.get(item, :ends_at) || DateTime.add(item.starts_at, 3600, :second)
+
+        {DateUtils.shift_to_offset(item.starts_at, viewer_tz),
+         DateUtils.shift_to_offset(ends_at, viewer_tz)}
+      end
+
+    %PhoenixLiveCalendar.Event{
+      id: ExternalSources.item_id(item),
+      title: item.title,
+      start: start_value,
+      end: end_value,
+      all_day: Map.get(item, :all_day) == true and match?(%Date{}, start_value),
+      color: "bg-accent",
+      text_color: nil,
+      description: nil,
+      location: Map.get(item, :location),
+      status: status_atom(Map.get(item, :status))
+    }
+  end
+
+  defp item_when(item, tz) do
+    starts = DateUtils.shift_to_offset(item.starts_at, tz)
+
+    case Map.get(item, :ends_at) do
+      %DateTime{} = ends_at ->
+        ends = DateUtils.shift_to_offset(ends_at, tz)
+        "#{Calendar.strftime(starts, "%Y-%m-%d %H:%M")} – #{Calendar.strftime(ends, "%H:%M")}"
+
+      _ ->
+        Calendar.strftime(starts, "%Y-%m-%d %H:%M")
+    end
+  end
+
+  defp source_label(sources, key) do
+    case Enum.find(sources, &(&1.key == key)) do
+      %{label: label} -> label
+      _ -> key
+    end
   end
 
   defp reload_window_counts(socket) do
@@ -892,6 +1017,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
     |> assign(:show_form_errors?, false)
     |> assign(:pending_participants, [])
     |> assign(:event_form, nil)
+    |> assign(:external_item, nil)
   end
 
   # ── Timezones ───────────────────────────────────────────────────────────
@@ -1350,6 +1476,28 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
           </span>
         </div>
         <:actions>
+          <%!-- Other modules' items on your own calendar: one switch per
+               source, remembered. Pressed = shown. --%>
+          <button
+            :for={source <- @external_sources}
+            type="button"
+            id={"calendar-source-#{source.key}"}
+            phx-click="toggle_source"
+            phx-value-key={source.key}
+            aria-pressed={to_string(source.key not in @hidden_sources)}
+            title={gettext("Show or hide on your calendar")}
+            class={[
+              "btn btn-sm gap-2",
+              if(source.key in @hidden_sources, do: "btn-ghost opacity-60", else: "btn-outline")
+            ]}
+          >
+            <span class={[
+              "w-2.5 h-2.5 rounded-full",
+              if(source.key in @hidden_sources, do: "bg-base-content/30", else: "bg-accent")
+            ]} />
+            {source.label}
+          </button>
+
           <%!-- Calendars panel toggle — view_others holders only. Opens
                INSTANTLY: client-side JS toggle, no server round-trip. --%>
           <div :if={@can_view_others?} class="relative">
@@ -1427,6 +1575,8 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
           <%= cond do %>
             <% not @show_event_modal -> %>
               <span class="inline-block w-28 h-5 bg-base-content/10 rounded animate-pulse"></span>
+            <% @external_item -> %>
+              {@external_item.title}
             <% is_nil(@editing_event) -> %>
               {gettext("New event")}
             <% @can_edit_event? -> %>
@@ -1437,6 +1587,39 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
         </:title>
 
         <%= if @show_event_modal do %>
+        <%= if @external_item do %>
+          <%!-- Another module's item: what it is and the way to where it is
+               managed. Nothing about it can be changed from the calendar. --%>
+          <div id="calendar-external-item" class="flex flex-col gap-2 text-sm">
+            <div class="flex flex-wrap items-center gap-2">
+              <.icon name="hero-clock" class="w-4 h-4 opacity-60" />
+              <span>{item_when(@external_item, @viewer_tz)}</span>
+              <span :if={Map.get(@external_item, :label)} class="badge badge-ghost badge-sm">
+                {@external_item.label}
+              </span>
+              <span
+                :if={Map.get(@external_item, :status) == "cancelled"}
+                class="badge badge-error badge-outline badge-sm"
+              >
+                {gettext("Cancelled")}
+              </span>
+            </div>
+            <div :if={Map.get(@external_item, :location)} class="flex items-center gap-2">
+              <.icon name="hero-map-pin" class="w-4 h-4 opacity-60" />
+              <span>{@external_item.location}</span>
+            </div>
+            <p class="text-xs text-base-content/60">
+              {gettext("From %{source} — shown here, managed there.",
+                source: source_label(@external_sources, @external_item.source)
+              )}
+            </p>
+            <div :if={Map.get(@external_item, :url)}>
+              <.link navigate={@external_item.url} class="btn btn-outline btn-sm">
+                <.icon name="hero-arrow-top-right-on-square" class="w-4 h-4" /> {gettext("Open")}
+              </.link>
+            </div>
+          </div>
+        <% else %>
 
         <%!-- Whose calendar an EXISTING event belongs to (immutable). Shown
              as a labeled read-only field, and only when it carries real
@@ -1745,6 +1928,7 @@ defmodule PhoenixKitCalendar.Web.CalendarLive do
               </div>
             </div>
           </div>
+        <% end %>
         <% end %>
         <% else %>
           <%!-- Skeleton mirroring the real form's field layout so the brief
