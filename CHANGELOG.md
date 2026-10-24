@@ -1,3 +1,33 @@
+## 0.3.0 - 2026-10-24
+
+### Added
+
+- **External sources: other modules' items on a person's calendar** (PR #9).
+  A module may export `phoenix_kit_calendar_sources/0` (or be listed under
+  `config :phoenix_kit_calendar, source_providers: [...]`) naming a function
+  that returns, for a user and a time window, the items that are theirs (a CRM
+  meeting they are a party to, say). The calendar asks on every load and
+  copies nothing, so a moved or cancelled item is right on the next look. The
+  source decides what the user may see; `PhoenixKitCalendar.ExternalSources`
+  documents the contract and the item shape.
+  - Items appear on the viewer's own calendar only, never a colleague's, in
+    one colour, struck through when cancelled.
+  - A switch per source in the page header shows or hides it; the choice is
+    stored on the user's custom fields (`"calendar_hidden_sources"`,
+    `ExternalSources.hidden/1`, `set_hidden/3,4`).
+  - An item opens read-only in the event dialog: when, where, which source,
+    and a link to where it is managed. All-day items show their dates, not a
+    midnight clock time.
+  - A source that raises, times out or returns malformed items (including a
+    wrongly typed optional field) contributes nothing; the person's own events
+    still show. At most 300 items are drawn per window.
+  - Not on the dashboard widgets yet.
+
+### Changed
+
+- Dependencies refreshed to `phoenix_kit` 2.64.1 and `phoenix_live_calendar`
+  0.5.1. The `phoenix_kit` requirement is unchanged (`>= 2.38.0 and < 3.0.0`).
+
 ## 0.2.3 - 2026-09-26
 
 ### Changed
