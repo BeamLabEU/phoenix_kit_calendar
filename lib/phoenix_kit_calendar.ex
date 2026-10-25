@@ -102,6 +102,9 @@ defmodule PhoenixKitCalendar do
   def version, do: @version
 
   @impl PhoenixKit.Module
+  def migration_module, do: PhoenixKitCalendar.Migrations
+
+  @impl PhoenixKit.Module
   @doc """
   Permission metadata for the roles/permissions matrix.
 

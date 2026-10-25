@@ -21,7 +21,7 @@ sibling tables, so no sibling module code is required.
 ## What this module does NOT do
 
 - No recurrence, and no separate calendars table — events are keyed by `owner_uuid` (deliberate v1 simplifications).
-- No migrations of its own: both tables ship in core's chain.
+- Does not change its tables through core. Core's chain still creates them, but their shape is this module's: `PhoenixKitCalendar.Migrations` (V1 adopts them) is where every change goes (see Database & migrations).
 - No module-owned gettext catalogue; strings ride core's backend (see Conventions).
 - Never requires sibling module code. Staff, CRM, and location integrations read the physical tables with schemaless queries; an unused module means empty tables mean no-ops. Do not add `phoenix_kit_staff` / `phoenix_kit_crm` / `phoenix_kit_locations` as deps.
 - No dependency on `phoenix_kit_dashboards`; the widgets are a duck-typed contract the dashboards Registry discovers.
@@ -99,6 +99,7 @@ lib/phoenix_kit_calendar/
   events.ex                             Events context: can_view?/2, can_edit?/2, list_events/5, list_all_events/4,
                                         get_event/2, readable?/2, participant?/2, count_events_by_owner/4,
                                         create/update/delete, live location names, activity log + broadcast
+  migrations.ex                         own migration chain (V1 adopts the two core-created tables)
   participants.ex                       list_for_event/2, replace_participants/3 (diff in one transaction)
   sources.ex                            schemaless search facade: users / staff / CRM contacts / CRM companies /
                                         locations; browse mode, per-source cap, cross-source dedup
@@ -149,18 +150,43 @@ Tables (core's chain), UUIDv7 PKs, `use PhoenixKit.SchemaPrefix` on both schemas
 
 ## Database & migrations
 
-None. Tables `phoenix_kit_calendar_events` and
-`phoenix_kit_calendar_event_participants` ship in core's chain (core V141,
-above the V135 baseline); `migration_module/0` is unset. That migration is
-released and immutable: a schema change is a new core migration first, then
-schema edits here. UUIDv7 PKs; `use PhoenixKit.SchemaPrefix` on both
-table-backed schemas (`test/schema_prefix_conformance_test.exs` enforces it).
+Owns a versioned chain: `PhoenixKitCalendar.Migrations` via
+`migration_module/0`, marker `pkcal_schema:<N>` as a `COMMENT ON TABLE` on
+`phoenix_kit_calendar_events` (none reads as 0), currently **V1**. The SQL is
+data (`up_statements/2`, `down_statements/2`); `up/1` / `down/1` `execute/1` it,
+so they only work inside an `Ecto.Migration` run. `mix phoenix_kit.update` runs
+core's chain, then a generated wrapper calling `up(prefix:, version:)`.
+
+- **V1 adopts the two tables core's chain creates**
+  (`phoenix_kit_calendar_events`, `phoenix_kit_calendar_event_participants`,
+  from core's V141), exactly as a fresh core install builds them, with core's
+  names. On existing installs only the marker is new; where core no longer
+  creates the tables, the same statements create them.
+- **A change to these tables is a new version here, never a core migration** —
+  core refuses one since V223 (its `PhoenixKit.Migrations.ModuleOwnedTables`;
+  plan: core's `dev_docs/plans/2026-10-25-module-table-ownership.md`). Until
+  core's `ExpectedSchema` hands the tables over, a version that reshapes an
+  object the manifest declares must take it out of the manifest first, or
+  `mix phoenix_kit.repair` restores the old shape; one that only adds objects the
+  manifest never names needs no core step.
+- **Never edit a shipped version's statements**: append behind `target >= N` in
+  `up_statements/2` and bump `@current_version`. **`down/1` never drops a
+  table** (`migrations_test.exs` asserts no emitted statement matches
+  `DROP|TRUNCATE|DELETE`).
+- **Proof the chain stands alone:** `test/phoenix_kit_calendar/migrations_build_alone_test.exs`
+  runs core's `PhoenixKit.TestSupport.ModuleChainCheck` (core after 2.64.1).
+  `test/phoenix_kit_calendar/migrations_test.exs` pins every table, index and
+  constraint name, each FK's delete action and prefix threading, and checks the
+  statements against core's manifest.
+
+UUIDv7 PKs; `use PhoenixKit.SchemaPrefix` on both table-backed schemas
+(`test/schema_prefix_conformance_test.exs` enforces it).
 
 ## Testing
 
 - Test DB `phoenix_kit_calendar_test` (`MIX_TEST_PARTITION` suffix honoured); `PGUSER` / `PGPASSWORD` / `PGHOST` honoured, defaulting to `postgres` / `postgres` / `localhost`.
 - Without Postgres: the behaviour test, the two conformance tests, and the changeset tests run; everything on `DataCase` / `LiveCase` is `@moduletag :integration` and is excluded. `test_helper.exs` probes for the DB with `psql -lqt`, then connects; either failure prints a warning and excludes `:integration`.
-- Schema: `PhoenixKit.Migration.ensure_current(PhoenixKitCalendar.Test.Repo, log: false)` builds core's full chain (which includes the calendar tables); there is no module chain. `test_helper.exs` also starts `PhoenixKit.PubSub.Manager`, `PhoenixKit.ModuleRegistry`, and `PhoenixKit.Users.RateLimiter.Backend` (`Auth.register_user/2` hits it), forces core's URL prefix to `/`, and starts the test Endpoint only when the DB is available.
+- Schema: `PhoenixKit.Migration.ensure_current(PhoenixKitCalendar.Test.Repo, log: false)` builds core's full chain (which still creates the calendar tables), then `PhoenixKitCalendar.Migrations.up_statements/1` is replayed when the marker is behind. `test_helper.exs` also starts `PhoenixKit.PubSub.Manager`, `PhoenixKit.ModuleRegistry`, and `PhoenixKit.Users.RateLimiter.Backend` (`Auth.register_user/2` hits it), forces core's URL prefix to `/`, and starts the test Endpoint only when the DB is available.
 - Support modules (`test/support/`): `DataCase` (sandbox owner, `errors_on/1`), `LiveCase` (`fake_scope/1`, `put_test_scope/2`, imports `Phoenix.LiveViewTest`), `Test.Endpoint` (`server: false`), `Test.Router` (`/en/admin/calendar` in a `live_session` with `Test.Hooks` `:assign_scope`, which mirrors the session's `"phoenix_kit_test_scope"` onto `:phoenix_kit_current_scope` / `:phoenix_kit_current_user`), `Test.Layouts`, `Test.Repo`, `ActivityLogAssertions` (`assert_activity_logged/2`, imported into both cases).
 - `fake_scope/1` builds a real `%Scope{}` with a real `%User{}`, a precise `cached_permissions` MapSet, and an optional `user_timezone`. Events tests still create REAL users (`Auth.register_user/2`) because `owner_uuid` is a genuine FK.
 - The participants suite seeds the physical staff/CRM/locations tables schemaless with `Repo.insert_all/2` and NO module code loaded — that is the standalone proof; keep it that way.

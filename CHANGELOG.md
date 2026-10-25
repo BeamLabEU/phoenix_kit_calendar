@@ -1,3 +1,15 @@
+## Unreleased
+
+### Added
+
+- The module's own migration chain, `PhoenixKitCalendar.Migrations`
+  (`migration_module/0`). V1 adopts the two calendar tables core's chain
+  creates (core's V141), exactly as a fresh core install builds them, and stamps
+  a `pkcal_schema:1` marker. Nothing changes on an existing install but the
+  marker; from now on a change to these tables ships here instead of in core. A
+  test proves the chain builds the tables without core (core's
+  `PhoenixKit.TestSupport.ModuleChainCheck`).
+
 ## 0.3.0 - 2026-10-24
 
 ### Added

@@ -83,6 +83,17 @@ repo_available =
       # V40 / V90 migrations. Schema drift impossible by construction.
       PhoenixKit.Migration.ensure_current(PhoenixKitCalendar.Test.Repo, log: false)
 
+      # Then this module's own chain (`PhoenixKitCalendar.Migrations`, V1
+      # adopts the calendar tables core creates), as `mix phoenix_kit.update`
+      # runs it. `up/1` needs an `Ecto.Migration` run; the SQL is data.
+      if PhoenixKitCalendar.Migrations.migrated_version_runtime() <
+           PhoenixKitCalendar.Migrations.current_version() do
+        Enum.each(
+          PhoenixKitCalendar.Migrations.up_statements("public"),
+          &PhoenixKitCalendar.Test.Repo.query!/1
+        )
+      end
+
       Ecto.Adapters.SQL.Sandbox.mode(PhoenixKitCalendar.Test.Repo, :manual)
       true
     rescue
@@ -115,8 +126,16 @@ Application.put_env(:phoenix_kit_calendar, :test_repo_available, repo_available)
 # Rate limiter backend — Auth.register_user/2 (used by test fixtures) hits it.
 {:ok, _pid} = PhoenixKit.Users.RateLimiter.Backend.start_link([])
 
+# `migrations_build_alone_test.exs` uses core's
+# `PhoenixKit.TestSupport.ModuleChainCheck`, which the first core release after
+# 2.64.1 ships; against an older core in `deps/` it is excluded.
+chain_check =
+  if Code.ensure_loaded?(PhoenixKit.TestSupport.ModuleChainCheck),
+    do: [],
+    else: [:requires_module_chain_check]
+
 # Exclude integration tests when DB is not available
-exclude = if repo_available, do: [], else: [:integration]
+exclude = if repo_available, do: chain_check, else: [:integration | chain_check]
 
 # Force PhoenixKit's URL prefix cache to an empty string for tests so
 # `Paths.index()` etc. produce paths the test router can match. Admin
