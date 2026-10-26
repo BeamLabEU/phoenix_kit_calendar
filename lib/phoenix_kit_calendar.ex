@@ -104,6 +104,13 @@ defmodule PhoenixKitCalendar do
   @impl PhoenixKit.Module
   def migration_module, do: PhoenixKitCalendar.Migrations
 
+  @doc """
+  The manifest of this module's tables, for `mix phoenix_kit.repair` and
+  `mix phoenix_kit.doctor`; see `PhoenixKitCalendar.ExpectedSchema`.
+  """
+  # No `@impl`, so this compiles against a core that lacks the callback.
+  def expected_schema, do: PhoenixKitCalendar.ExpectedSchema
+
   @impl PhoenixKit.Module
   @doc """
   Permission metadata for the roles/permissions matrix.

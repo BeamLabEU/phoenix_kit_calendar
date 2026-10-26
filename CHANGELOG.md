@@ -2,6 +2,7 @@
 
 ### Added
 
+- **The module supplies the manifest of its 2 tables** (`expected_schema/0`, `PhoenixKitCalendar.ExpectedSchema`), so `mix phoenix_kit.repair` and `mix phoenix_kit.doctor` check and repair them again, now from the module's own chain instead of core's manifest. Generated from `PhoenixKitCalendar.Migrations` by core's `dev_docs/squash/generate_module_manifest.exs`, never edited by hand. Core uses it from the first release after 2.64.1; before that nothing reads it. Repair is additive (it creates what is missing and reports the rest) and checks the tables only while the database is at the chain's current version. No migration.
 - The module's own migration chain, `PhoenixKitCalendar.Migrations`
   (`migration_module/0`). V1 adopts the two calendar tables core's chain
   creates (core's V141), exactly as a fresh core install builds them, and stamps
