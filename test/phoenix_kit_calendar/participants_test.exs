@@ -111,6 +111,25 @@ defmodule PhoenixKitCalendar.ParticipantsTest do
     Enum.map(events, & &1.title)
   end
 
+  describe "a host without the staff, CRM and locations modules" do
+    test "events still list, and a user participant still sees theirs", %{
+      alice: alice,
+      bob: bob,
+      event: event
+    } do
+      {:ok, _} = Participants.replace_participants(editor(alice), event, [user_entry(bob)])
+
+      # Those tables belong to other modules' chains; inside the sandbox
+      # transaction they can be dropped without anyone noticing.
+      for table <- ~w(phoenix_kit_crm_company_memberships phoenix_kit_crm_contacts
+                      phoenix_kit_crm_companies phoenix_kit_staff_people phoenix_kit_locations) do
+        Repo.query!("DROP TABLE IF EXISTS #{table} CASCADE")
+      end
+
+      assert "Kickoff" in visible_titles(bob)
+    end
+  end
+
   describe "replace_participants/3 authorization and kinds" do
     test "requires event edit access", %{bob: bob, event: event} do
       viewer = scope_for(bob, ["calendar", "calendar.view_others"])

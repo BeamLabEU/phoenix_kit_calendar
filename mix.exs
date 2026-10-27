@@ -87,10 +87,21 @@ defmodule PhoenixKitCalendar.MixProject do
       # there and no longer feature-detected, so a lower core fails to compile.
       # Patch-precise floor in the compound form, so the ceiling stays open
       # through every later 2.x minor (see test/core_pin_conformance_test.exs).
-      pk_dep(:phoenix_kit, ">= 2.38.0 and < 3.0.0"),
+      # Floor 2.65.0: the first core with the `file_references/0` and `expected_schema/0`
+      # callbacks this module implements (`@impl`). The ceiling is open through core 3.x.
+      pk_dep(:phoenix_kit, ">= 2.65.0 and < 4.0.0"),
 
       # The server-rendered calendar component (month view etc.).
       pk_dep(:phoenix_live_calendar, "~> 0.2"),
+
+      # Test-only: the participant sources read `phoenix_kit_staff_people`,
+      # `phoenix_kit_locations` and the CRM contact and company tables, which
+      # the Staff, Locations and CRM chains own. The test helper runs all
+      # three (PHOENIX_KIT_STAFF_PATH / _LOCATIONS_PATH / _CRM_PATH point at
+      # checkouts); hosts without them get the sources' runtime fallbacks.
+      pk_dep(:phoenix_kit_staff, "~> 0.11", only: :test),
+      pk_dep(:phoenix_kit_locations, "~> 0.8", only: :test),
+      pk_dep(:phoenix_kit_crm, "~> 0.18", only: :test),
 
       # LiveView is needed for the admin page.
       {:phoenix_live_view, "~> 1.1"},

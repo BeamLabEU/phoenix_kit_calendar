@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Changed
+
+- **Core pin widened to `>= 2.65.0 and < 4.0.0`:** works with core 3.x (core 3.0 stops creating the module tables; this module's own chain builds its tables). The floor is the first core with the `file_references/0` and `expected_schema/0` callbacks, which now carry `@impl PhoenixKit.Module`.
+
+- Tests build the tables the participant sources read but do not own (staff people, locations, CRM contacts and companies) by running those modules' chains, which are now test-only dependencies (`phoenix_kit_staff`, `phoenix_kit_locations`, `phoenix_kit_crm`). Hosts without them are unaffected. The external-items LiveView test uses its own source key, since the real CRM source is now discovered too. The transitional "core's ExpectedSchema manifest" test is removed.
+
 ### Added
 
 - **The module supplies the manifest of its 2 tables** (`expected_schema/0`, `PhoenixKitCalendar.ExpectedSchema`), so `mix phoenix_kit.repair` and `mix phoenix_kit.doctor` check and repair them again, now from the module's own chain instead of core's manifest. Generated from `PhoenixKitCalendar.Migrations` by core's `dev_docs/squash/generate_module_manifest.exs`, never edited by hand. Core uses it from the first release after 2.64.1; before that nothing reads it. Repair is additive (it creates what is missing and reports the rest) and checks the tables only while the database is at the chain's current version. No migration.

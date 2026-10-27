@@ -16,7 +16,7 @@ defmodule PhoenixKitCalendar.Web.ExternalItemsLiveTest do
     @moduledoc false
     def phoenix_kit_calendar_sources,
       do: [
-        %{key: "crm", label: "Client interactions", items: {__MODULE__, :items}},
+        %{key: "visits", label: "Client interactions", items: {__MODULE__, :items}},
         %{key: "docs", label: "Deadlines", items: {__MODULE__, :none}}
       ]
 
@@ -87,7 +87,7 @@ defmodule PhoenixKitCalendar.Web.ExternalItemsLiveTest do
 
     assert html =~ "Site visit for #{String.slice(me.uuid, 0, 8)}"
     assert html =~ "Called off"
-    assert html =~ ~s(id="calendar-source-crm")
+    assert html =~ ~s(id="calendar-source-visits")
     assert html =~ "Client interactions"
     assert html =~ ~s(aria-pressed="true")
   end
@@ -106,11 +106,11 @@ defmodule PhoenixKitCalendar.Web.ExternalItemsLiveTest do
   test "the switch hides the source and brings it back", %{conn: conn, me: me} do
     {:ok, view, _html} = conn |> login(me, ["calendar"]) |> live(@path)
 
-    html = view |> element("#calendar-source-crm") |> render_click()
+    html = view |> element("#calendar-source-visits") |> render_click()
     refute html =~ "Site visit for"
     assert html =~ ~s(aria-pressed="false")
 
-    html = view |> element("#calendar-source-crm") |> render_click()
+    html = view |> element("#calendar-source-visits") |> render_click()
     assert html =~ "Site visit for"
   end
 
@@ -120,15 +120,15 @@ defmodule PhoenixKitCalendar.Web.ExternalItemsLiveTest do
   } do
     {:ok, view, _html} = conn |> login(me, ["calendar"]) |> live(@path)
 
-    view |> element("#calendar-source-crm") |> render_click()
+    view |> element("#calendar-source-visits") |> render_click()
     html = view |> element("#calendar-source-docs") |> render_click()
 
     refute html =~ "Site visit for"
-    assert ExternalSources.hidden(Auth.get_user(me.uuid)) == ["crm", "docs"]
+    assert Enum.sort(ExternalSources.hidden(Auth.get_user(me.uuid))) == ["docs", "visits"]
 
     html = view |> element("#calendar-source-docs") |> render_click()
     refute html =~ "Site visit for"
-    assert ExternalSources.hidden(Auth.get_user(me.uuid)) == ["crm"]
+    assert ExternalSources.hidden(Auth.get_user(me.uuid)) == ["visits"]
   end
 
   test "an unknown source key changes nothing", %{conn: conn, me: me} do
@@ -140,7 +140,11 @@ defmodule PhoenixKitCalendar.Web.ExternalItemsLiveTest do
        %{conn: conn, me: me} do
     {:ok, view, _html} = conn |> login(me, ["calendar"]) |> live(@path)
 
-    send(view.pid, {:calendar_event_click, ExternalSources.item_id(%{source: "crm", id: "one"})})
+    send(
+      view.pid,
+      {:calendar_event_click, ExternalSources.item_id(%{source: "visits", id: "one"})}
+    )
+
     html = render(view)
 
     assert html =~ ~s(id="calendar-external-item")
@@ -152,7 +156,11 @@ defmodule PhoenixKitCalendar.Web.ExternalItemsLiveTest do
     # the Save button (the modal itself names the form in a data attribute)
     refute html =~ ~r/\sform="calendar-event-form"/
 
-    send(view.pid, {:calendar_event_click, ExternalSources.item_id(%{source: "crm", id: "two"})})
+    send(
+      view.pid,
+      {:calendar_event_click, ExternalSources.item_id(%{source: "visits", id: "two"})}
+    )
+
     assert render(view) =~ "Cancelled"
 
     # an all-day item is dates (the exclusive end shown as its last day), not a clock time
@@ -160,7 +168,7 @@ defmodule PhoenixKitCalendar.Web.ExternalItemsLiveTest do
 
     send(
       view.pid,
-      {:calendar_event_click, ExternalSources.item_id(%{source: "crm", id: "allday"})}
+      {:calendar_event_click, ExternalSources.item_id(%{source: "visits", id: "allday"})}
     )
 
     html = render(view)
@@ -177,7 +185,7 @@ defmodule PhoenixKitCalendar.Web.ExternalItemsLiveTest do
 
   test "an id of an item that is no longer there closes the dialog quietly", %{conn: conn, me: me} do
     {:ok, view, _html} = conn |> login(me, ["calendar"]) |> live(@path)
-    send(view.pid, {:calendar_event_click, "ext:crm:gone"})
+    send(view.pid, {:calendar_event_click, "ext:visits:gone"})
     refute render(view) =~ ~s(id="calendar-external-item")
   end
 end

@@ -403,46 +403,101 @@ defmodule PhoenixKitCalendar.Events do
 
   # LIVE participant visibility: true when any participant row of the event
   # resolves to one of `user_uuids` RIGHT NOW. Resolution joins the PHYSICAL
-  # staff/CRM tables (they exist in every install via core migrations, so no
-  # module code is needed; empty tables no-op). A company participant means
-  # "whoever is a member of that company at query time" — the boss's explicit
+  # staff/CRM tables (owned by those modules; a kind whose tables are missing is
+  # skipped). A company participant means "whoever is a member of that company at query time" — the boss's explicit
   # choice (2026-07-09) over save-time snapshots.
   defp participant_visible_dynamic(user_uuids) do
+    ids = user_uuids
+
+    [
+      dynamic(
+        [e],
+        fragment(
+          """
+          EXISTS (SELECT 1 FROM phoenix_kit_calendar_event_participants p
+                  WHERE p.event_uuid = ? AND p.kind = 'user' AND p.target_uuid = ANY(?))
+          """,
+          e.uuid,
+          type(^ids, {:array, UUIDv7})
+        )
+      )
+      | participant_kind_dynamics(ids)
+    ]
+    |> Enum.reduce(fn d, acc -> dynamic(^acc or ^d) end)
+  end
+
+  # The staff and CRM kinds read those modules' tables, which exist only where
+  # the module's own chain has run. A query naming a missing table fails as a
+  # whole, so each kind is included only when its tables are there.
+  defp participant_kind_dynamics(ids) do
+    %{rows: [[staff?, contacts?, memberships?, companies?]]} =
+      repo().query!(
+        """
+        SELECT to_regclass('phoenix_kit_staff_people') IS NOT NULL,
+               to_regclass('phoenix_kit_crm_contacts') IS NOT NULL,
+               to_regclass('phoenix_kit_crm_company_memberships') IS NOT NULL,
+               to_regclass('phoenix_kit_crm_companies') IS NOT NULL
+        """,
+        []
+      )
+
+    [
+      {staff?, &staff_dynamic/1},
+      {contacts?, &crm_contact_dynamic/1},
+      {contacts? and memberships? and companies?, &crm_company_dynamic/1}
+    ]
+    |> Enum.flat_map(fn {present?, build} -> if present?, do: [build.(ids)], else: [] end)
+  end
+
+  defp staff_dynamic(ids) do
     dynamic(
       [e],
       fragment(
         """
-        EXISTS (
-          SELECT 1 FROM phoenix_kit_calendar_event_participants p
-          WHERE p.event_uuid = ?
-            AND (
-              (p.kind = 'user' AND p.target_uuid = ANY(?))
-              OR (p.kind = 'staff_person' AND EXISTS (
-                    SELECT 1 FROM phoenix_kit_staff_people sp
-                    WHERE sp.uuid = p.target_uuid
-                      AND sp.status <> 'trashed'
-                      AND sp.user_uuid = ANY(?)))
-              OR (p.kind = 'crm_contact' AND EXISTS (
-                    SELECT 1 FROM phoenix_kit_crm_contacts c
-                    WHERE c.uuid = p.target_uuid
-                      AND c.status <> 'trashed'
-                      AND c.user_uuid = ANY(?)))
-              OR (p.kind = 'crm_company' AND EXISTS (
-                    SELECT 1 FROM phoenix_kit_crm_company_memberships m
-                    JOIN phoenix_kit_crm_contacts c2 ON c2.uuid = m.contact_uuid
-                    JOIN phoenix_kit_crm_companies co ON co.uuid = m.company_uuid
-                    WHERE m.company_uuid = p.target_uuid
-                      AND co.status <> 'trashed'
-                      AND c2.status <> 'trashed'
-                      AND c2.user_uuid = ANY(?)))
-            )
-        )
+        EXISTS (SELECT 1 FROM phoenix_kit_calendar_event_participants p
+                WHERE p.event_uuid = ? AND p.kind = 'staff_person' AND EXISTS (
+                  SELECT 1 FROM phoenix_kit_staff_people sp
+                  WHERE sp.uuid = p.target_uuid AND sp.status <> 'trashed'
+                    AND sp.user_uuid = ANY(?)))
         """,
         e.uuid,
-        type(^user_uuids, {:array, UUIDv7}),
-        type(^user_uuids, {:array, UUIDv7}),
-        type(^user_uuids, {:array, UUIDv7}),
-        type(^user_uuids, {:array, UUIDv7})
+        type(^ids, {:array, UUIDv7})
+      )
+    )
+  end
+
+  defp crm_contact_dynamic(ids) do
+    dynamic(
+      [e],
+      fragment(
+        """
+        EXISTS (SELECT 1 FROM phoenix_kit_calendar_event_participants p
+                WHERE p.event_uuid = ? AND p.kind = 'crm_contact' AND EXISTS (
+                  SELECT 1 FROM phoenix_kit_crm_contacts c
+                  WHERE c.uuid = p.target_uuid AND c.status <> 'trashed'
+                    AND c.user_uuid = ANY(?)))
+        """,
+        e.uuid,
+        type(^ids, {:array, UUIDv7})
+      )
+    )
+  end
+
+  defp crm_company_dynamic(ids) do
+    dynamic(
+      [e],
+      fragment(
+        """
+        EXISTS (SELECT 1 FROM phoenix_kit_calendar_event_participants p
+                WHERE p.event_uuid = ? AND p.kind = 'crm_company' AND EXISTS (
+                  SELECT 1 FROM phoenix_kit_crm_company_memberships m
+                  JOIN phoenix_kit_crm_contacts c2 ON c2.uuid = m.contact_uuid
+                  JOIN phoenix_kit_crm_companies co ON co.uuid = m.company_uuid
+                  WHERE m.company_uuid = p.target_uuid AND co.status <> 'trashed'
+                    AND c2.status <> 'trashed' AND c2.user_uuid = ANY(?)))
+        """,
+        e.uuid,
+        type(^ids, {:array, UUIDv7})
       )
     )
   end

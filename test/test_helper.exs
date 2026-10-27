@@ -83,6 +83,16 @@ repo_available =
       # V40 / V90 migrations. Schema drift impossible by construction.
       PhoenixKit.Migration.ensure_current(PhoenixKitCalendar.Test.Repo, log: false)
 
+      # The tables the participant sources read but this module does not own:
+      # Staff's people, Locations' locations and the CRM's contacts and companies
+      # (test-only dependencies).
+      Enum.each(
+        [PhoenixKitStaff.Migrations, PhoenixKitLocations.Migrations, PhoenixKitCRM.Migrations],
+        fn chain ->
+          Enum.each(chain.up_statements("public"), &PhoenixKitCalendar.Test.Repo.query!/1)
+        end
+      )
+
       # Then this module's own chain (`PhoenixKitCalendar.Migrations`, V1
       # adopts the calendar tables core creates), as `mix phoenix_kit.update`
       # runs it. `up/1` needs an `Ecto.Migration` run; the SQL is data.
